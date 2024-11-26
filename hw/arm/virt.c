@@ -229,6 +229,132 @@ static const int a15irqmap[] = {
     [VIRT_PLATFORM_BUS] = 112, /* ...to 112 + PLATFORM_BUS_NUM_IRQS -1 */
 };
 
+unsigned int virt_get_caches(const VirtMachineState *vms,
+                             PPTTCPUCaches *caches)
+{
+    ARMCPU *armcpu = ARM_CPU(qemu_get_cpu(0)); /* assume homogeneous CPUs */
+    bool ccidx = cpu_isar_feature(any_ccidx, armcpu);
+    unsigned int num_cache, i;
+    int level_instr = 1, level_data = 1;
+
+    for (i = 0, num_cache = 0; i < CPU_MAX_CACHES; i++, num_cache++) {
+        int type = (armcpu->clidr >> (3 * i)) & 7;
+        int bank_index;
+        int level;
+        PPTTCPUCacheType cache_type;
+
+        if (type == 0) {
+            break;
+        }
+
+        switch (type) {
+        case 1:
+            cache_type = INSTRUCTION;
+            level = level_instr;
+            break;
+        case 2:
+            cache_type = DATA;
+            level = level_data;
+            break;
+        case 4:
+            cache_type = UNIFIED;
+            level = level_instr > level_data ? level_instr : level_data;
+            break;
+        case 3: /* Split - Do data first */
+            cache_type = DATA;
+            level = level_data;
+            break;
+        default:
+            error_setg(&error_abort, "Unrecognized cache type");
+            return 0;
+        }
+        /*
+         * ccsidr is indexed using both the level and whether it is
+         * an instruction cache. Unified caches use the same storage
+         * as data caches.
+         */
+        bank_index = (i * 2) | ((type == 1) ? 1 : 0);
+        if (ccidx) {
+            caches[num_cache] = (PPTTCPUCaches) {
+                .type =  cache_type,
+                .level = level,
+                .linesize = 1 << (FIELD_EX64(armcpu->ccsidr[bank_index],
+                                             CCSIDR_EL1,
+                                             CCIDX_LINESIZE) + 4),
+                .associativity = FIELD_EX64(armcpu->ccsidr[bank_index],
+                                            CCSIDR_EL1,
+                                            CCIDX_ASSOCIATIVITY) + 1,
+                .sets = FIELD_EX64(armcpu->ccsidr[bank_index], CCSIDR_EL1,
+                                   CCIDX_NUMSETS) + 1,
+            };
+        } else {
+            caches[num_cache] = (PPTTCPUCaches) {
+                .type =  cache_type,
+                .level = level,
+                .linesize = 1 << (FIELD_EX64(armcpu->ccsidr[bank_index],
+                                             CCSIDR_EL1, LINESIZE) + 4),
+                .associativity = FIELD_EX64(armcpu->ccsidr[bank_index],
+                                            CCSIDR_EL1,
+                                            ASSOCIATIVITY) + 1,
+                .sets = FIELD_EX64(armcpu->ccsidr[bank_index], CCSIDR_EL1,
+                                   NUMSETS) + 1,
+            };
+        }
+        caches[num_cache].size = caches[num_cache].associativity *
+            caches[num_cache].sets * caches[num_cache].linesize;
+
+        /* Break one 'split' entry up into two records */
+        if (type == 3) {
+            num_cache++;
+            bank_index = (i * 2) | 1;
+            if (ccidx) {
+                /* Instruction cache: bottom bit set when reading banked reg */
+                caches[num_cache] = (PPTTCPUCaches) {
+                    .type = INSTRUCTION,
+                    .level = level_instr,
+                    .linesize = 1 << (FIELD_EX64(armcpu->ccsidr[bank_index],
+                                                 CCSIDR_EL1,
+                                                 CCIDX_LINESIZE) + 4),
+                    .associativity = FIELD_EX64(armcpu->ccsidr[bank_index],
+                                                CCSIDR_EL1,
+                                                CCIDX_ASSOCIATIVITY) + 1,
+                    .sets = FIELD_EX64(armcpu->ccsidr[bank_index], CCSIDR_EL1,
+                                       CCIDX_NUMSETS) + 1,
+                };
+            } else {
+                caches[num_cache] = (PPTTCPUCaches) {
+                    .type = INSTRUCTION,
+                    .level = level_instr,
+                    .linesize = 1 << (FIELD_EX64(armcpu->ccsidr[bank_index],
+                                                 CCSIDR_EL1, LINESIZE) + 4),
+                    .associativity = FIELD_EX64(armcpu->ccsidr[bank_index],
+                                                CCSIDR_EL1,
+                                                ASSOCIATIVITY) + 1,
+                    .sets = FIELD_EX64(armcpu->ccsidr[bank_index], CCSIDR_EL1,
+                                       NUMSETS) + 1,
+                };
+            }
+            caches[num_cache].size = caches[num_cache].associativity *
+                caches[num_cache].sets * caches[num_cache].linesize;
+        }
+        switch (type) {
+        case 1:
+            level_instr++;
+            break;
+        case 2:
+            level_data++;
+            break;
+        case 3:
+        case 4:
+            level_instr++;
+            level_data++;
+            break;
+        }
+    }
+
+    return num_cache;
+}
+
 static void create_randomness(MachineState *ms, const char *node)
 {
     struct {
@@ -412,13 +538,95 @@ static void fdt_add_timer_nodes(const VirtMachineState *vms)
     }
 }
 
+static void add_cache_node(void *fdt, char * nodepath, PPTTCPUCaches cache,
+                           uint32_t *next_level) {
+    /* Assume L2/3 are unified caches. */
+
+    uint32_t phandle;
+
+    qemu_fdt_add_path(fdt, nodepath);
+    phandle = qemu_fdt_alloc_phandle(fdt);
+    qemu_fdt_setprop_cell(fdt, nodepath, "phandle", phandle);
+    qemu_fdt_setprop_cell(fdt, nodepath, "cache-level", cache.level);
+    qemu_fdt_setprop_cell(fdt, nodepath, "cache-size", cache.size);
+    qemu_fdt_setprop_cell(fdt, nodepath, "cache-block-size", cache.linesize);
+    qemu_fdt_setprop_cell(fdt, nodepath, "cache-sets", cache.sets);
+    qemu_fdt_setprop(fdt, nodepath, "cache-unified", NULL, 0);
+    if (cache.level != 3) {
+        /* top level cache doesn't have next-level-cache property */
+        qemu_fdt_setprop_cell(fdt, nodepath, "next-level-cache", *next_level);
+    }
+
+    *next_level = phandle;
+}
+
+static bool add_cpu_cache_hierarchy(void *fdt, PPTTCPUCaches* cache,
+                                    uint32_t cache_cnt,
+                                    uint32_t top_level,
+                                    uint32_t bottom_level,
+                                    uint32_t cpu_id,
+                                    uint32_t *next_level) {
+    bool found_cache = false;
+    char *nodepath;
+
+    for (int level = top_level; level >= bottom_level; level--) {
+        for (int i = 0; i < cache_cnt; i++) {
+            if (i != level) {
+                continue;
+            }
+
+            nodepath = g_strdup_printf("/cpus/cpu@%d/l%d-cache",
+                                       cpu_id, level);
+            add_cache_node(fdt, nodepath, cache[i], next_level);
+            found_cache = true;
+            g_free(nodepath);
+
+        }
+    }
+
+    return found_cache;
+}
+
+static void set_cache_properties(void *fdt, const char *nodename,
+                                 const char *prefix, PPTTCPUCaches cache)
+{
+    char prop_name[64];
+
+    snprintf(prop_name, sizeof(prop_name), "%s-block-size", prefix);
+    qemu_fdt_setprop_cell(fdt, nodename, prop_name, cache.linesize);
+
+    snprintf(prop_name, sizeof(prop_name), "%s-size", prefix);
+    qemu_fdt_setprop_cell(fdt, nodename, prop_name, cache.size);
+
+    snprintf(prop_name, sizeof(prop_name), "%s-sets", prefix);
+    qemu_fdt_setprop_cell(fdt, nodename, prop_name, cache.sets);
+}
+
 static void fdt_add_cpu_nodes(const VirtMachineState *vms)
 {
     int cpu;
     int addr_cells = 1;
     const MachineState *ms = MACHINE(vms);
+    const MachineClass *mc = MACHINE_GET_CLASS(ms);
     const VirtMachineClass *vmc = VIRT_MACHINE_GET_CLASS(vms);
     int smp_cpus = ms->smp.cpus;
+    int socket_id, cluster_id, core_id;
+    uint32_t next_level = 0;
+    uint32_t socket_offset = 0, cluster_offset = 0, core_offset = 0;
+    int last_socket = -1, last_cluster = -1, last_core = -1;
+    int top_node = 3, top_cluster = 3, top_core = 3;
+    int bottom_node = 3, bottom_cluster = 3, bottom_core = 3;
+    unsigned int num_cache;
+    PPTTCPUCaches caches[16];
+    bool cache_created = false;
+
+    num_cache = virt_get_caches(vms, caches);
+
+    if (mc->smp_props.has_caches &&
+        partial_cache_description(ms, caches, num_cache)) {
+            error_setg(&error_fatal, "Missing cache description");
+            return;
+    }
 
     /*
      * See Linux Documentation/devicetree/bindings/arm/cpus.yaml
@@ -447,9 +655,14 @@ static void fdt_add_cpu_nodes(const VirtMachineState *vms)
     qemu_fdt_setprop_cell(ms->fdt, "/cpus", "#size-cells", 0x0);
 
     for (cpu = smp_cpus - 1; cpu >= 0; cpu--) {
+        socket_id = cpu / (ms->smp.clusters * ms->smp.cores * ms->smp.threads);
+        cluster_id = cpu / (ms->smp.cores * ms->smp.threads) % ms->smp.clusters;
+        core_id = cpu / (ms->smp.threads) % ms->smp.cores;
+
         char *nodename = g_strdup_printf("/cpus/cpu@%d", cpu);
         ARMCPU *armcpu = ARM_CPU(qemu_get_cpu(cpu));
         CPUState *cs = CPU(armcpu);
+        const char *prefix = NULL;
 
         qemu_fdt_add_subnode(ms->fdt, nodename);
         qemu_fdt_setprop_string(ms->fdt, nodename, "device_type", "cpu");
@@ -478,6 +691,137 @@ static void fdt_add_cpu_nodes(const VirtMachineState *vms)
             qemu_fdt_setprop_cell(ms->fdt, nodename, "phandle",
                                   qemu_fdt_alloc_phandle(ms->fdt));
         }
+
+        if (!vmc->no_cpu_topology && num_cache) {
+            for (uint8_t i = 0; i < num_cache; i++) {
+                /* only level 1 in the CPU entry */
+                if (caches[i].level > 1) {
+                    continue;
+                }
+
+                if (caches[i].type == INSTRUCTION) {
+                    prefix = "i-cache";
+                } else if (caches[i].type == DATA) {
+                    prefix = "d-cache";
+                } else if (caches[i].type == UNIFIED) {
+                    error_setg(&error_fatal,
+                               "Unified type is not implemented at level %d",
+                               caches[i].level);
+                    return;
+                } else {
+                    error_setg(&error_fatal, "Undefined cache type");
+                    return;
+                }
+
+                set_cache_properties(ms->fdt, nodename, prefix, caches[i]);
+            }
+        }
+
+        if (socket_id != last_socket) {
+            bottom_node = top_node;
+            /* this assumes socket as the highest topological level */
+            socket_offset = 0;
+            cluster_offset = 0;
+            if (cache_described_at(ms, CPU_TOPOLOGY_LEVEL_SOCKET) &&
+                find_the_lowest_level_cache_defined_at_level(ms,
+                    &bottom_node,
+                    CPU_TOPOLOGY_LEVEL_SOCKET)) {
+
+                if (bottom_node == 1) {
+                    error_report(
+                        "Cannot share L1 at socket_id %d. DT limiation on "
+                        "sharing at cache level = 1", 
+                        socket_id);
+                }
+
+                cache_created = add_cpu_cache_hierarchy(ms->fdt, caches,
+                                                        num_cache,
+                                                        top_node,
+                                                        bottom_node, cpu,
+                                                        &socket_offset);
+
+                if (!cache_created) {
+                    error_setg(&error_fatal,
+                               "Socket: No caches at levels %d-%d",
+                               top_node, bottom_node);
+                    return;
+                }
+
+                top_cluster = bottom_node - 1;
+            }
+
+            last_socket = socket_id;
+        }
+
+        if (cluster_id != last_cluster) {
+            bottom_cluster = top_cluster;
+            cluster_offset = socket_offset;
+            core_offset = 0;
+            if (cache_described_at(ms, CPU_TOPOLOGY_LEVEL_CLUSTER) &&
+                find_the_lowest_level_cache_defined_at_level(ms,
+                    &bottom_cluster,
+                    CPU_TOPOLOGY_LEVEL_CLUSTER)) {
+
+                cache_created = add_cpu_cache_hierarchy(ms->fdt, caches,
+                                                        num_cache,
+                                                        top_cluster,
+                                                        bottom_cluster, cpu,
+                                                        &cluster_offset);
+                if (bottom_cluster == 1) {
+                    error_report(
+                        "Cannot share L1 at socket_id %d, cluster_id %d. "
+                        "DT limitation on sharing at cache level = 1.",
+                        socket_id, cluster_id);
+                }
+
+                if (!cache_created) {
+                    error_setg(&error_fatal,
+                               "Cluster: No caches at levels %d-%d",
+                               top_cluster, bottom_cluster);
+                    return;
+                }
+
+                top_core = bottom_cluster - 1;
+            } else if (top_cluster == bottom_node - 1) {
+                top_core = bottom_node - 1;
+            }
+
+            last_cluster = cluster_id;
+        }
+
+        if (core_id != last_core) {
+            bottom_core = top_core;
+            core_offset = cluster_offset;
+            if (cache_described_at(ms, CPU_TOPOLOGY_LEVEL_CORE) &&
+                find_the_lowest_level_cache_defined_at_level(ms,
+                    &bottom_core,
+                    CPU_TOPOLOGY_LEVEL_CORE)) {
+
+                if (bottom_core == 1) {
+                    bottom_core++;
+                } else {
+                    cache_created = add_cpu_cache_hierarchy(ms->fdt,
+                                                            caches,
+                                                            num_cache,
+                                                            top_core,
+                                                            bottom_core, cpu,
+                                                            &core_offset);
+
+                    if (!cache_created) {
+                        error_setg(&error_fatal,
+                                   "Core: No caches at levels %d-%d",
+                                   top_core, bottom_core);
+                        return;
+                    }
+                }
+            }
+
+            last_core = core_id;
+        }
+
+        next_level = core_offset;
+        qemu_fdt_setprop_cell(ms->fdt, nodename, "next-level-cache",
+                              next_level);
 
         g_free(nodename);
     }
@@ -3147,6 +3491,11 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
     hc->unplug = virt_machine_device_unplug_cb;
     mc->nvdimm_supported = true;
     mc->smp_props.clusters_supported = true;
+    /* Supported caches */
+    mc->smp_props.cache_supported[CACHE_LEVEL_AND_TYPE_L1D] = true;
+    mc->smp_props.cache_supported[CACHE_LEVEL_AND_TYPE_L1I] = true;
+    mc->smp_props.cache_supported[CACHE_LEVEL_AND_TYPE_L2] = true;
+    mc->smp_props.cache_supported[CACHE_LEVEL_AND_TYPE_L3] = true;
     mc->auto_enable_numa_with_memhp = true;
     mc->auto_enable_numa_with_memdev = true;
     /* platform instead of architectural choice */
