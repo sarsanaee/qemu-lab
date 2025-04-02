@@ -424,10 +424,13 @@ static void fdt_add_timer_nodes(const VirtMachineState *vms)
 static void fdt_add_cpu_nodes(const VirtMachineState *vms)
 {
     int cpu;
+    uint64_t cpu_id;
     int addr_cells = 1;
     const MachineState *ms = MACHINE(vms);
     const VirtMachineClass *vmc = VIRT_MACHINE_GET_CLASS(vms);
     int smp_cpus = ms->smp.cpus;
+    // uint64_t *threads_array = malloc(ms->smp.threads * 2 * sizeof(uint64_t));
+    uint64_t *threads_array = g_new0(uint64_t,ms->smp.threads * 2);
 
     /*
      * See Linux Documentation/devicetree/bindings/arm/cpus.yaml
@@ -455,7 +458,7 @@ static void fdt_add_cpu_nodes(const VirtMachineState *vms)
     qemu_fdt_setprop_cell(ms->fdt, "/cpus", "#address-cells", addr_cells);
     qemu_fdt_setprop_cell(ms->fdt, "/cpus", "#size-cells", 0x0);
 
-    for (cpu = smp_cpus - 1; cpu >= 0; cpu--) {
+    for (cpu = smp_cpus/ms->smp.threads - 1; cpu >= 0; cpu--) {
         char *nodename = g_strdup_printf("/cpus/cpu@%d", cpu);
         ARMCPU *armcpu = ARM_CPU(qemu_get_cpu(cpu));
         CPUState *cs = CPU(armcpu);
@@ -470,12 +473,18 @@ static void fdt_add_cpu_nodes(const VirtMachineState *vms)
                                         "enable-method", "psci");
         }
 
+        for (int threads = 0; threads < ms->smp.threads; threads++) {
+            cpu_id = arm_cpu_mp_affinity(
+                        ARM_CPU(qemu_get_cpu(cpu * ms->smp.threads + threads)));
+            threads_array[threads * 2] = addr_cells; // I check this only value one
+            threads_array[threads * 2 + 1] = cpu_id;
+        }
+
         if (addr_cells == 2) {
-            qemu_fdt_setprop_u64(ms->fdt, nodename, "reg",
-                                 arm_cpu_mp_affinity(armcpu));
+            // for this part I stilll don't know what exactly should be done.
+            qemu_fdt_setprop_sized_cells_from_array(ms->fdt, nodename, "reg", 4, threads_array);
         } else {
-            qemu_fdt_setprop_cell(ms->fdt, nodename, "reg",
-                                  arm_cpu_mp_affinity(armcpu));
+            qemu_fdt_setprop_sized_cells_from_array(ms->fdt, nodename, "reg", ms->smp.threads, threads_array);
         }
 
         if (ms->possible_cpus->cpus[cs->cpu_index].props.has_node_id) {
@@ -488,8 +497,15 @@ static void fdt_add_cpu_nodes(const VirtMachineState *vms)
                                   qemu_fdt_alloc_phandle(ms->fdt));
         }
 
+        if (ms->smp.threads > 1)
+            qemu_fdt_setprop_cell(ms->fdt, nodename, "#cpu-cells", 1);
+        else
+            qemu_fdt_setprop_cell(ms->fdt, nodename, "#cpu-cells", 0);
+
         g_free(nodename);
     }
+
+    free(threads_array);
 
     if (!vmc->no_cpu_topology) {
         /*
@@ -510,28 +526,37 @@ static void fdt_add_cpu_nodes(const VirtMachineState *vms)
          */
         qemu_fdt_add_subnode(ms->fdt, "/cpus/cpu-map");
 
-        for (cpu = smp_cpus - 1; cpu >= 0; cpu--) {
+        for (cpu = smp_cpus / ms->smp.threads - 1; cpu >= 0; cpu--) {
             char *cpu_path = g_strdup_printf("/cpus/cpu@%d", cpu);
             char *map_path;
 
             if (ms->smp.threads > 1) {
-                map_path = g_strdup_printf(
-                    "/cpus/cpu-map/socket%d/cluster%d/core%d/thread%d",
-                    cpu / (ms->smp.clusters * ms->smp.cores * ms->smp.threads),
-                    (cpu / (ms->smp.cores * ms->smp.threads)) % ms->smp.clusters,
-                    (cpu / ms->smp.threads) % ms->smp.cores,
-                    cpu % ms->smp.threads);
+                for (int thread = ms->smp.threads - 1; thread >= 0; thread--) {
+                    uint64_t handle;
+                    map_path = g_strdup_printf(
+                        "/cpus/cpu-map/socket%d/cluster%d/core%d/thread%d",
+                        cpu / (ms->smp.clusters * ms->smp.cores),
+                        (cpu / (ms->smp.cores)) % ms->smp.clusters,
+                        (cpu ) % ms->smp.cores,
+                        thread);
+
+                    qemu_fdt_add_path(ms->fdt, map_path);
+                    handle = qemu_fdt_get_phandle(ms->fdt, cpu_path);
+                    qemu_fdt_setprop_cells(ms->fdt, map_path, "cpus",
+                                           handle, thread);
+                    g_free(map_path);
+                }
             } else {
                 map_path = g_strdup_printf(
                     "/cpus/cpu-map/socket%d/cluster%d/core%d",
                     cpu / (ms->smp.clusters * ms->smp.cores),
                     (cpu / ms->smp.cores) % ms->smp.clusters,
                     cpu % ms->smp.cores);
+                qemu_fdt_add_path(ms->fdt, map_path);
+                qemu_fdt_setprop_phandle(ms->fdt, map_path, "cpu", cpu_path);
+                g_free(map_path);
             }
-            qemu_fdt_add_path(ms->fdt, map_path);
-            qemu_fdt_setprop_phandle(ms->fdt, map_path, "cpu", cpu_path);
 
-            g_free(map_path);
             g_free(cpu_path);
         }
     }
