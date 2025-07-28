@@ -628,6 +628,8 @@
   'base': 'EventLoopBaseProperties',
   'data': {} }
 
+
+
 ##
 # @MemoryBackendProperties:
 #
@@ -686,6 +688,19 @@
             '*reserve': 'bool',
             'size': 'size',
             '*x-use-canonical-path-for-ramblock-id': 'bool' } }
+
+##
+# @MemoryBackendTaggedProperties:
+#
+# Properties for objects of classes derived from memory-backend.
+#
+# @tag: just a tag (default: 'test')
+#
+# Since: 2.1
+##
+{ 'struct': 'MemoryBackendTaggedProperties',
+  'base': 'MemoryBackendProperties',
+  'data': { '*tag': 'str' } }
 
 ##
 # @MemoryBackendFileProperties:
@@ -1218,6 +1233,7 @@
     { 'name': 'memory-backend-memfd',
       'if': 'CONFIG_LINUX' },
     'memory-backend-ram',
+    'memory-backend-tagged',
     { 'name': 'memory-backend-shm',
       'if': 'CONFIG_POSIX' },
     'pef-guest',
@@ -1296,6 +1312,7 @@
       'memory-backend-memfd':       { 'type': 'MemoryBackendMemfdProperties',
                                       'if': 'CONFIG_LINUX' },
       'memory-backend-ram':         'MemoryBackendProperties',
+      'memory-backend-tagged':         'MemoryBackendTaggedProperties',
       'memory-backend-shm':         { 'type': 'MemoryBackendShmProperties',
                                       'if': 'CONFIG_POSIX' },
       'pr-manager-helper':          { 'type': 'PrManagerHelperProperties',

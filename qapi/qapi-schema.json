@@ -75,3 +75,5 @@
 { 'include': 'cryptodev.json' }
 { 'include': 'cxl.json' }
 { 'include': 'uefi.json' }
+{ 'include': 'tagged-mem.json' }
+

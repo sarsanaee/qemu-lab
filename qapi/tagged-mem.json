@@ -1,0 +1,11 @@
+##
+# @hello-from-tagged-mem:
+#
+# @tag: list of UEFI variables
+#
+# Since: 10.0
+##
+{ 'command': 'hello-from-tagged-mem',
+  'data': { 'tag': 'str' },
+  'returns': ''
+}

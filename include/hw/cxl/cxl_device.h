@@ -627,6 +627,7 @@ struct CXLType3Dev {
     struct dynamic_capacity {
         HostMemoryBackend *host_dc;
         AddressSpace host_dc_as;
+        uint64_t total_capacity_cmd; /* 256M aligned */
         /*
          * total_capacity is equivalent to the dynamic capability
          * memory region size.
