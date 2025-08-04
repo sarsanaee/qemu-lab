@@ -15,5 +15,15 @@ typedef struct MemoryBackendTagged {
     char *tag;
 } MemoryBackendTagged;
 
+struct TagSearchContext {
+    const char *tag_value;
+    HostMemoryBackend *result;
+};
+
+HostMemoryBackend *memory_backend_tagged_find_by_tag(const char *tag,
+                                                     Error **errp);
+
+int visit_tagged(Object *obj, void *opaque);
+
 #endif // HW_MISC_TAGGED_MEM_H
 

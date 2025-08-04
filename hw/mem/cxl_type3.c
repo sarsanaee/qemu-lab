@@ -11,6 +11,7 @@
 #include <math.h>
 
 #include "qemu/osdep.h"
+#include "qemu/typedefs.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qapi/qapi-commands-cxl.h"
@@ -30,6 +31,7 @@
 #include "system/numa.h"
 #include "hw/cxl/cxl.h"
 #include "hw/pci/msix.h"
+#include "hw/mem/tagged_mem_simple_dev.h"
 
 /* type3 device private */
 enum CXL_T3_MSIX_VECTOR {
@@ -727,6 +729,48 @@ static void cxl_destroy_dc_regions(CXLType3Dev *ct3d)
         region = &ct3d->dc.regions[i];
         g_free(region->blk_bitmap);
     }
+}
+
+static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
+                                                  const char *tag, Error **errp)
+{
+    DeviceState *ds = DEVICE(ct3d);
+    MemoryRegion *dc_mr;
+    char *dc_name;
+
+    ct3d->dc.host_dc = memory_backend_tagged_find_by_tag(tag, errp); // I am trying to work this out! API to be decided later!
+    if (!ct3d->dc.host_dc) {
+        error_setg(errp, "dynamic capacity must have a backing device");
+        return false;
+    }
+
+    dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
+    if (!dc_mr) {
+        error_setg(errp, "test dynamic capacity must have a backing device");
+        return false;
+    }
+
+    if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
+        error_setg(errp, "memory backend %s can't be used multiple times.",
+           object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
+        return false;
+    }
+
+    /*
+     * Set DC regions as volatile for now, non-volatile support can
+     * be added in the future if needed.
+     */
+    memory_region_set_nonvolatile(dc_mr, false);
+    memory_region_set_enabled(dc_mr, true);
+    host_memory_backend_set_mapped(ct3d->dc.host_dc, true);
+    if (ds->id) {
+        dc_name = g_strdup_printf("cxl-dcd-dpa-dc-space:%s", ds->id);
+    } else {
+        dc_name = g_strdup("cxl-dcd-dpa-dc-space");
+    }
+    address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
+    g_free(dc_name);
+    return true;
 }
 
 static bool cxl_setup_memory(CXLType3Dev *ct3d, Error **errp)
@@ -1959,7 +2003,7 @@ bool cxl_extent_groups_overlaps_dpa_range(CXLDCExtentGroupList *list,
  * Currently DC extents add/release requests are processed.
  */
 static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
-        uint16_t hid, CXLDCEventType type, uint8_t rid,
+        uint16_t hid, CXLDCEventType type, uint8_t rid, const char* tag,
         CxlDynamicCapacityExtentList *records, Error **errp)
 {
     Object *obj;
@@ -1972,7 +2016,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
     g_autofree unsigned long *blk_bitmap = NULL;
     int i;
 
-    // What if there were more than one device? with dynamic capacity?
+    *errp = NULL;
+
     obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
     if (!obj) {
         error_setg(errp, "Unable to resolve CXL type 3 device");
@@ -1985,11 +2030,21 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         return;
     }
 
-
     if (rid >= dcd->dc.num_regions) {
         error_setg(errp, "region id is too large");
         return;
     }
+
+    // check if the backend memory is all mapped out! If it is not mapped out, you must first set that up, by looking through tags!;
+    if (!dcd->dc.host_dc) {
+        // try to set things up now:
+        // TODO: this is not the right place to do this, but for now it is ok
+        if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
+            return;
+        }
+    }
+
+
     block_size = dcd->dc.regions[rid].block_size;
     blk_bitmap = bitmap_new(dcd->dc.regions[rid].len / block_size);
 
@@ -2094,7 +2149,8 @@ void qmp_cxl_add_dynamic_capacity(const char *path, uint16_t host_id,
     case CXL_EXTENT_SELECTION_POLICY_PRESCRIPTIVE:
         qmp_cxl_process_dynamic_capacity_prescriptive(path, host_id,
                                                       DC_EVENT_ADD_CAPACITY,
-                                                      region, extents, errp);
+                                                      region, tag, extents,
+                                                      errp);
         return;
     default:
         error_setg(errp, "Selection policy not supported");
@@ -2125,7 +2181,8 @@ void qmp_cxl_release_dynamic_capacity(const char *path, uint16_t host_id,
     switch (removal_policy) {
     case CXL_EXTENT_REMOVAL_POLICY_PRESCRIPTIVE:
         qmp_cxl_process_dynamic_capacity_prescriptive(path, host_id, type,
-                                                      region, extents, errp);
+                                                      region, tag, extents,
+                                                      errp);
         return;
     default:
         error_setg(errp, "Removal policy not supported");

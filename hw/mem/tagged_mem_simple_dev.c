@@ -15,13 +15,13 @@
 //         fprintf(stderr, ">>> Hello %s from tagged memory backend module! \n", name);
 // }
 
-static int check_property_equals_test(Object *obj, const char *prop_name) {
+static int check_property_equals_test(Object *obj, const char *prop_name,
+                                      void *opaque)
+{
+    struct TagSearchContext *ctx = opaque;
     ObjectProperty *prop = object_property_find(obj, prop_name);
-    if (!prop) {
-        printf("Property '%s' not found in object type '%s'\n",
-               prop_name, object_get_typename(obj));
+    if (!prop)
         return -1;
-    }
 
     Error *err = NULL;
     char *value = object_property_get_str(obj, prop_name, &err);
@@ -30,37 +30,73 @@ static int check_property_equals_test(Object *obj, const char *prop_name) {
         return -1;
     }
 
-    if (strcmp(value, "test") == 0) {
-        printf("Property '%s' equals \"test\"\n", prop_name);
-    } else {
-        printf("Property '%s' is \"%s\" (not \"test\")\n", prop_name, value);
-    }
+    if (strcmp(value, ctx->tag_value) == 0) {
+        ctx->result = MEMORY_BACKEND(obj);
+        g_free(value);
+        return 0;
+    } 
 
     g_free(value);
-    return 0;
+    return -1;
 }
 
-int my_child_iterator(Object *obj, void *opaque);
-int my_child_iterator(Object *obj, void *opaque) {
-	// Do something with the child
+int visit_tagged(Object *obj, void *opaque) {
     int res;
-	printf("Child: (%s)\n", object_get_typename(obj));
 
-	res = check_property_equals_test(obj, "tag");
-
+	res = check_property_equals_test(obj, "tag", opaque);
     if (res < 0) {
-	    object_child_foreach(obj, my_child_iterator, opaque);
+	    object_child_foreach(obj, visit_tagged, opaque); // this is not the best way
+                                                         // because it searches all children which is wrong. I want to bail out immediately if one of the childs give 0
     }
 
 	return res;
 }
 
+HostMemoryBackend *memory_backend_tagged_find_by_tag(const char *tag,
+                                                     Error **errp)
+{
+    struct TagSearchContext ctx = {
+        .tag_value = tag,
+        .result = NULL,
+    };
+
+    Object *root = object_get_objects_root();
+    object_child_foreach(root, visit_tagged, &ctx);
+
+    if (!ctx.result) {
+        return NULL;
+    }
+
+    return ctx.result;
+}
+
+
 void qmp_hello_from_tagged_mem(const char *tag, Error **errp)
 {
     Object *root = object_get_objects_root();
 
-	object_child_foreach(root, my_child_iterator, NULL);
+	object_child_foreach(root, visit_tagged, NULL);
 }
+
+// static void visit_tagged(Object *obj, const char *name, Object *child, void *opaque) {
+//     TagSearchContext *ctx = opaque;
+// 
+//     if (object_dynamic_cast(child, TYPE_YOUR_TAGGED_BACKEND)) {
+//         Error *err = NULL;
+//         char *val = object_property_get_str(child, "tag", &err);
+//         if (!err && val && strcmp(val, ctx->tag_value) == 0) {
+//             ctx->result = MEMORY_BACKEND(child);
+//             g_free(val);
+//             return;
+//         }
+//         g_free(val);
+//         if (err) error_free(err);
+//     }
+// 
+//     object_child_foreach(child, visit_tagged, opaque);
+// }
+
+
 
 // void qmp_hello_from_tagged_mem(const char *tag, Error **errp)
 // {
