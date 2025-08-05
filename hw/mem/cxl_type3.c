@@ -738,7 +738,7 @@ static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
     MemoryRegion *dc_mr;
     char *dc_name;
 
-    ct3d->dc.host_dc = memory_backend_tagged_find_by_tag(tag, errp); // I am trying to work this out! API to be decided later!
+    ct3d->dc.host_dc = memory_backend_tagged_find_by_tag(tag, errp);
     if (!ct3d->dc.host_dc) {
         error_setg(errp, "dynamic capacity must have a backing device");
         return false;
@@ -751,8 +751,9 @@ static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
     }
 
     if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
-        error_setg(errp, "memory backend %s can't be used multiple times.",
-           object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
+        error_setg(
+            errp, "memory backend %s can't be used multiple times.",
+            object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
         return false;
     }
 
@@ -854,40 +855,6 @@ static bool cxl_setup_memory(CXLType3Dev *ct3d, Error **errp)
 
     ct3d->dc.total_capacity = 0;
     if (ct3d->dc.num_regions > 0) {
-        // MemoryRegion *dc_mr;
-        // char *dc_name;
-
-        // if (!ct3d->dc.host_dc) {
-        //     error_setg(errp, "dynamic capacity must have a backing device");
-        //     return false;
-        // }
-
-        // dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
-        // if (!dc_mr) {
-        //     error_setg(errp, "test dynamic capacity must have a backing device");
-        //     return false;
-        // }
-
-        // if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
-        //     error_setg(errp, "memory backend %s can't be used multiple times.",
-        //        object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
-        //     return false;
-        // }
-        // /*
-        //  * Set DC regions as volatile for now, non-volatile support can
-        //  * be added in the future if needed.
-        //  */
-        // memory_region_set_nonvolatile(dc_mr, false);
-        // memory_region_set_enabled(dc_mr, true);
-        // host_memory_backend_set_mapped(ct3d->dc.host_dc, true);
-        // if (ds->id) {
-        //     dc_name = g_strdup_printf("cxl-dcd-dpa-dc-space:%s", ds->id);
-        // } else {
-        //     dc_name = g_strdup("cxl-dcd-dpa-dc-space");
-        // }
-        // address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
-        // g_free(dc_name);
-
         if (!cxl_create_dc_regions(ct3d, errp)) {
             error_append_hint(errp, "setup DC regions failed");
             return false;
@@ -2035,15 +2002,11 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         return;
     }
 
-    // check if the backend memory is all mapped out! If it is not mapped out, you must first set that up, by looking through tags!;
     if (!dcd->dc.host_dc) {
-        // try to set things up now:
-        // TODO: this is not the right place to do this, but for now it is ok
         if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
             return;
         }
     }
-
 
     block_size = dcd->dc.regions[rid].block_size;
     blk_bitmap = bitmap_new(dcd->dc.regions[rid].len / block_size);
