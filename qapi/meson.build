@@ -54,6 +54,7 @@ qapi_all_modules = [
   'vfio',
   'virtio',
   'yank',
+  'tagged-mem'
 ]
 if have_system
   qapi_all_modules += [
