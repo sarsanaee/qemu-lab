@@ -1,0 +1,11 @@
+##
+# @tagged-mem-trigger-testing:
+#
+# @tag: tag for memory-backend to find
+#
+# Since: 10.1
+##
+{ 'command': 'tagged-mem-trigger-testing',
+  'data': { 'tag': 'str' },
+  'returns': ''
+}
