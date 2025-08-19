@@ -583,6 +583,9 @@ struct CXLType3Dev {
     HostMemoryBackend *lsa;
     uint64_t sn;
 
+    bool direct_inuse[CXL_HDM_DECODER_COUNT];
+    MemoryRegion direct_mr[CXL_HDM_DECODER_COUNT];
+
     /* State */
     AddressSpace hostvmem_as;
     AddressSpace hostpmem_as;

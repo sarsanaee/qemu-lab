@@ -420,6 +420,8 @@ static void hdm_decoder_commit(CXLType3Dev *ct3d, int which)
     ctrl = FIELD_DP32(ctrl, CXL_HDM_DECODER0_CTRL, COMMITTED, 1);
 
     stl_le_p(cache_mem + R_CXL_HDM_DECODER0_CTRL + which * hdm_inc, ctrl);
+
+    cfmws_update_non_interleaved();
 }
 
 static void hdm_decoder_uncommit(CXLType3Dev *ct3d, int which)
@@ -756,6 +758,10 @@ static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
         dc_name = g_strdup("cxl-dcd-dpa-dc-space");
     }
     address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
+
+    cfmws_update_non_interleaved();
+    printf("ACTIVATED\n");
+
     g_free(dc_name);
     return true;
 }

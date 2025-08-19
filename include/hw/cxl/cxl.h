@@ -57,6 +57,8 @@ struct CXLHost {
     bool passthrough;
 };
 
+bool cfmws_update_non_interleaved(void);
+
 #define TYPE_PXB_CXL_HOST "pxb-cxl-host"
 OBJECT_DECLARE_SIMPLE_TYPE(CXLHost, PXB_CXL_HOST)
 
