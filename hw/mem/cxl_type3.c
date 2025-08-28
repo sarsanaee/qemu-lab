@@ -11,6 +11,7 @@
 #include <math.h>
 
 #include "qemu/osdep.h"
+#include "hw/cxl/cxl_events.h"
 #include "qemu/typedefs.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
@@ -1957,6 +1958,58 @@ bool cxl_extent_groups_overlaps_dpa_range(CXLDCExtentGroupList *list,
     return false;
 }
 
+
+static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
+        uint16_t hid, CXLDCEventType type, uint8_t rid, const char* tag,
+        CxlDynamicCapacityExtentList *records, Error **errp) {
+
+    Object *obj;
+    CXLType3Dev *dcd;
+    // uint32_t num_extents = 0;
+    // CxlDynamicCapacityExtentList *list;
+    // CXLDCExtentGroup *group = NULL;
+    CXLDCExtentList *list = NULL;
+    CXLDCExtent *ent;
+    // g_autofree CXLDCExtentRaw *extents = NULL;
+
+    obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
+    if (!obj) {
+        error_setg(errp, "Unable to resolve CXL type 3 device");
+        return;
+    }
+
+    dcd = CXL_TYPE3(obj);
+    if (!dcd->dc.num_regions) {
+        error_setg(errp, "No dynamic capacity support from the device");
+        return;
+    }
+
+    if (rid >= dcd->dc.num_regions) {
+        error_setg(errp, "region id is too large");
+        return;
+    }
+
+    if (!dcd->dc.host_dc) {
+            error_setg(errp, "No backend memory yet for dynamic capacity "
+                             "region %d", rid);
+            return;
+    }
+
+    // Maybe double check the use of the function. check type.
+    // Find all of the extents that are with the tag that we are looking for.
+    // I don't want to do anything with the extent list coming from the command.
+    // extents = cxl_find_extents_by_tag(&dcd->dc.extents, rid, tag);
+    list = &dcd->dc.extents;
+    QTAILQ_FOREACH(ent, list, node) {
+        printf("Extent: start_dpa: 0x%" PRIx64 ", len: 0x%" PRIx64
+               ", tag: %s\n", ent->start_dpa, ent->len, ent->tag);
+    }
+
+    printf("Removal policy tagged_based %s\n", tag);
+
+    return;
+}
+
 /*
  * The main function to process dynamic capacity event with extent list.
  * Currently DC extents add/release requests are processed.
@@ -1992,7 +2045,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         return;
     }
 
-    if (!dcd->dc.host_dc) {
+    if (!dcd->dc.host_dc && type == DC_EVENT_ADD_CAPACITY) {
         if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
             return;
         }
@@ -2072,6 +2125,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         extents[i].start_dpa = dpa;
         extents[i].len = len;
         memset(extents[i].tag, 0, 0x10);
+        // memcpy(extents[i].tag, tag, 0x10); // it is just two bytes!
         extents[i].shared_seq = 0;
         if (type == DC_EVENT_ADD_CAPACITY) {
             group = cxl_insert_extent_to_extent_group(group,
@@ -2079,6 +2133,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
                                                       extents[i].len,
                                                       extents[i].tag,
                                                       extents[i].shared_seq);
+            printf("ADDED\n");
         }
 
         list = list->next;
@@ -2098,10 +2153,12 @@ void qmp_cxl_add_dynamic_capacity(const char *path, uint16_t host_id,
                                   CxlDynamicCapacityExtentList  *extents,
                                   Error **errp)
 {
+    CXLDCEventType type = DC_EVENT_ADD_CAPACITY;
+
     switch (sel_policy) {
     case CXL_EXTENT_SELECTION_POLICY_PRESCRIPTIVE:
         qmp_cxl_process_dynamic_capacity_prescriptive(path, host_id,
-                                                      DC_EVENT_ADD_CAPACITY,
+                                                      type,
                                                       region, tag, extents,
                                                       errp);
         return;
@@ -2136,6 +2193,11 @@ void qmp_cxl_release_dynamic_capacity(const char *path, uint16_t host_id,
         qmp_cxl_process_dynamic_capacity_prescriptive(path, host_id, type,
                                                       region, tag, extents,
                                                       errp);
+        return;
+    case CXL_EXTENT_REMOVAL_POLICY_TAG_BASED:
+        qmp_cxl_process_dynamic_capacity_tag_based(path, host_id, type,
+                                                   region, tag, extents,
+                                                   errp);
         return;
     default:
         error_setg(errp, "Removal policy not supported");
