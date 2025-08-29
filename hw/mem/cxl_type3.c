@@ -30,6 +30,7 @@
 #include "qemu/guest-random.h"
 #include "system/hostmem.h"
 #include "system/numa.h"
+#include <string.h>
 #include "hw/cxl/cxl.h"
 #include "hw/pci/msix.h"
 #include "hw/mem/tagged_mem.h"
@@ -1965,12 +1966,9 @@ static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
 
     Object *obj;
     CXLType3Dev *dcd;
-    // uint32_t num_extents = 0;
-    // CxlDynamicCapacityExtentList *list;
-    // CXLDCExtentGroup *group = NULL;
     CXLDCExtentList *list = NULL;
     CXLDCExtent *ent;
-    // g_autofree CXLDCExtentRaw *extents = NULL;
+    g_autofree CXLDCExtentRaw *extents = NULL;
 
     obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
     if (!obj) {
@@ -1995,18 +1993,31 @@ static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
             return;
     }
 
-    // Maybe double check the use of the function. check type.
-    // Find all of the extents that are with the tag that we are looking for.
-    // I don't want to do anything with the extent list coming from the command.
-    // extents = cxl_find_extents_by_tag(&dcd->dc.extents, rid, tag);
     list = &dcd->dc.extents;
-    QTAILQ_FOREACH(ent, list, node) {
-        printf("Extent: start_dpa: 0x%" PRIx64 ", len: 0x%" PRIx64
-               ", tag: %s\n", ent->start_dpa, ent->len, ent->tag);
+    size_t cap = 8, n = 0;
+    extents = g_new0(CXLDCExtentRaw, cap);
+    QTAILQ_FOREACH (ent, list, node) {
+        // if (tag && memcmp(ent->tag, tag, strlen(tag) + 1) == 0) {
+        if (true) {
+            if (n == cap) {
+                cap = cap < 8 ? 8 : cap * 2;
+                extents = g_renew(CXLDCExtentRaw, extents, cap);
+            }
+
+            extents[n++] = (CXLDCExtentRaw){ .start_dpa = ent->start_dpa,
+                                             .len = ent->len,
+                                             .shared_seq = 0 };
+        	memset(extents[n - 1].tag, 0, 0x10);
+
+            printf("Found extent with tag %s dpa 0x%" PRIx64
+                   " len 0x%" PRIx64 "\n",
+                   ent->tag, ent->start_dpa, ent->len);
+        }
     }
 
-    printf("Removal policy tagged_based %s\n", tag);
-
+    // shrink to fit! Just in case;
+    extents = g_renew(CXLDCExtentRaw, extents, n);
+    cxl_create_dc_event_records_for_extents(dcd, type, extents, n);
     return;
 }
 
@@ -2110,7 +2121,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
             }
         }
         list = list->next;
-        num_extents++;
+		num_extents++;
     }
 
     /* Create extent list for event being passed to host */
@@ -2143,6 +2154,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         cxl_extent_group_list_insert_tail(&dcd->dc.extents_pending, group);
         dcd->dc.total_extent_count += num_extents;
     }
+
+    printf("Total %d extents processed\n", dcd->dc.total_extent_count);
 
     cxl_create_dc_event_records_for_extents(dcd, type, extents, num_extents);
 }
