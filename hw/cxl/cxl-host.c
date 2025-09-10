@@ -630,6 +630,77 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
                                     state->decoder_base - fw->base,
                                     &ct3d->direct_mr[state->hdm_decoder_idx]);
         ct3d->direct_inuse[state->hdm_decoder_idx] = true;
+        ct3d->dc.cur_hdm_decoder_idx = state->hdm_decoder_idx;
+        ct3d->dc.cur_fw = fw;
+    }
+    return 0;
+}
+
+int update_non_interleaved_tmp(CXLType3Dev *ct3d)
+{
+    uint32_t *cache_mem;
+    unsigned int hdm_count, i;
+    uint32_t cap;
+    int hdm_inc = R_CXL_HDM_DECODER1_BASE_LO - R_CXL_HDM_DECODER0_BASE_LO;
+    uint64_t dpa_base = 0;
+
+    if (!ct3d)
+        return 0;
+
+    cache_mem = ct3d->cxl_cstate.crb.cache_mem_registers;
+    /* Walk the decoders and find any committed with iw not set */
+    cap = ldl_le_p(cache_mem + R_CXL_HDM_DECODER_CAPABILITY);
+    hdm_count = cxl_decoder_count_dec(FIELD_EX32(cap,
+                                                 CXL_HDM_DECODER_CAPABILITY,
+                                                 DECODER_COUNT));
+
+    /* Now for each committed HDM decoder */
+    for (i = 0; i < hdm_count; i++) {
+        uint64_t decoder_base, decoder_size, skip;
+        uint32_t hdm_ctrl, low, high;
+        int iw;
+
+        hdm_ctrl = ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_CTRL + i * hdm_inc);
+        if (!FIELD_EX32(hdm_ctrl, CXL_HDM_DECODER0_CTRL, COMMITTED)) {
+            return 0;
+        }
+
+        /* Even if this decoder is interleaved need to keep track of DPA */
+        low = ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_DPA_SKIP_LO +
+                       i * hdm_inc);
+        high = ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_DPA_SKIP_HI +
+                        i * hdm_inc);
+        skip = ((uint64_t)high << 32) | (low & 0xf0000000);
+        dpa_base += skip;
+
+        low = ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_SIZE_LO + i * hdm_inc);
+        high = ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_SIZE_HI + i * hdm_inc);
+        decoder_size = ((uint64_t)high << 32) | (low & 0xf0000000);
+        iw = FIELD_EX32(hdm_ctrl, CXL_HDM_DECODER0_CTRL, IW);
+
+
+        /* Get the HPA of the base */
+        low = ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_BASE_LO + i * hdm_inc);
+        high = ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_BASE_HI + i * hdm_inc);
+        decoder_base = ((uint64_t)high << 32) | (low & 0xf0000000);
+
+        printf("non interleaved decoder %lx %lx %lx\n", decoder_base,
+               decoder_size, dpa_base);
+
+        /* Is it non interleaved? - need to check full path later */
+        if (FIELD_EX32(hdm_ctrl, CXL_HDM_DECODER0_CTRL, IW) == 0) {
+            struct cxl_direct_pt_state state = {
+                .ct3d = ct3d,
+                .decoder_base = decoder_base,
+                .decoder_size = decoder_size,
+                .dpa_base = dpa_base,
+                .hdm_decoder_idx = i,
+            };
+            object_child_foreach_recursive(object_get_root(),
+                                           cxl_fmws_direct_passthrough, &state);
+        }
+        dpa_base += decoder_size / cxl_interleave_ways_dec(iw, &error_fatal);
+
     }
     return 0;
 }

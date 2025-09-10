@@ -761,7 +761,8 @@ static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
     }
     address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
 
-    cfmws_update_non_interleaved();
+    // cfmws_update_non_interleaved();
+    update_non_interleaved_tmp(ct3d); // updated
     printf("ACTIVATED\n");
 
     g_free(dc_name);
@@ -1289,8 +1290,8 @@ static const Property ct3_props[] = {
     DEFINE_PROP_UINT8("num-dc-regions", CXLType3Dev, dc.num_regions, 0),
     DEFINE_PROP_SIZE("dc-regions-total-size", CXLType3Dev,
                      dc.total_capacity_cmd, 0),
-    DEFINE_PROP_LINK("volatile-dc-memdev", CXLType3Dev, dc.host_dc,
-                     TYPE_MEMORY_BACKEND, HostMemoryBackend *),
+    // DEFINE_PROP_LINK("volatile-dc-memdev", CXLType3Dev, dc.host_dc,
+    //                  TYPE_MEMORY_BACKEND, HostMemoryBackend *),
     DEFINE_PROP_PCIE_LINK_SPEED("x-speed", CXLType3Dev, speed,
                                 PCIE_LINK_SPEED_32),
     DEFINE_PROP_PCIE_LINK_WIDTH("x-width", CXLType3Dev, width,
@@ -1372,10 +1373,12 @@ static bool set_cacheline(CXLType3Dev *ct3d, uint64_t dpa_offset, uint8_t *data)
         pmr = host_memory_backend_get_memory(ct3d->hostpmem);
         pmr_size = memory_region_size(pmr);
     }
+
+    // here it is just a check!
     if (ct3d->dc.host_dc) {
         dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
         dc_size = memory_region_size(dc_mr);
-     }
+    }
 
     if (!vmr && !pmr && !dc_mr) {
         return false;
@@ -2021,6 +2024,77 @@ static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
     return;
 }
 
+void qmp_cxl_release_dynamic_capacity_status(const char *path,
+        uint16_t hid, uint8_t rid, const char* tag, Error **errp)
+{
+    Object *obj;
+    CXLType3Dev *dcd;
+    CXLDCExtentList *list = NULL;
+    CXLDCExtent *ent;
+    // g_autofree CXLDCExtentRaw *extents = NULL;
+
+    obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
+    if (!obj) {
+        error_setg(errp, "Unable to resolve CXL type 3 device");
+        return;
+    }
+
+    dcd = CXL_TYPE3(obj);
+    if (!dcd->dc.num_regions) {
+        error_setg(errp, "No dynamic capacity support from the device");
+        return;
+    }
+
+    // does this suppose to check if there is even an region id with that ID at
+    // all?
+    if (rid >= dcd->dc.num_regions) {
+        error_setg(errp, "region id is too large");
+        return;
+    }
+
+    if (tag) {
+        error_setg(errp, "tag must be valid");
+        return;
+    }
+
+    list = &dcd->dc.extents;
+    size_t cap = 8, n = 0;
+    printf("cap %lu, %lu\n", cap, n);
+    int hdm_decoder_id;
+    struct CXLFixedWindow *fw;
+    // HostMemoryBackend *hm;
+    //
+    // If this is found, then we grab the information and do the rest of the stuff
+    // but we want to make sure that this is properly removed, and if we know that it is removed,
+    // then we cannot really do anything, because we have already lost the object!
+
+    QTAILQ_FOREACH (ent, list, node) {
+        // if (tag && memcmp(ent->tag, tag, strlen(tag) + 1) == 0) {
+        if (true) {
+            printf("Found extent with tag %s dpa 0x%" PRIx64
+                   " len 0x%" PRIx64 "\n",
+                   ent->tag, ent->start_dpa, ent->len);
+            hdm_decoder_id = ent->hdm_decoder_idx;
+            fw = ent->fw;
+            // hm = ent->host_dc;
+        }
+    }
+
+    // For this we need to find that FMW and then get the main memory.
+
+    // hdm_decoder_idx = ?!
+    MemoryRegion *mr = &dcd->direct_mr[hdm_decoder_id];
+    memory_region_del_subregion(&fw->mr, mr);
+    dcd->direct_inuse[hdm_decoder_id] = false;
+    g_free(mr);
+
+    // Maybe also disconnect that memory? Should we do that? I think it must be
+    // connected but just remove that memory.
+
+    return;
+}
+
+
 /*
  * The main function to process dynamic capacity event with extent list.
  * Currently DC extents add/release requests are processed.
@@ -2138,12 +2212,17 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         memset(extents[i].tag, 0, 0x10);
         // memcpy(extents[i].tag, tag, 0x10); // it is just two bytes!
         extents[i].shared_seq = 0;
+
         if (type == DC_EVENT_ADD_CAPACITY) {
-            group = cxl_insert_extent_to_extent_group(group,
+            group = cxl_insert_extent_to_extent_group_tmp(group,
                                                       extents[i].start_dpa,
                                                       extents[i].len,
                                                       extents[i].tag,
-                                                      extents[i].shared_seq);
+                                                      extents[i].shared_seq,
+                                                      dcd->dc.host_dc,
+                                                      dcd->dc.host_dc_as,
+                                                      dcd->dc.cur_hdm_decoder_idx,
+                                                      dcd->dc.cur_fw);
             printf("ADDED\n");
         }
 

@@ -58,6 +58,7 @@ struct CXLHost {
 };
 
 bool cfmws_update_non_interleaved(void);
+int update_non_interleaved_tmp(CXLType3Dev *ct3d);
 
 #define TYPE_PXB_CXL_HOST "pxb-cxl-host"
 OBJECT_DECLARE_SIMPLE_TYPE(CXLHost, PXB_CXL_HOST)
