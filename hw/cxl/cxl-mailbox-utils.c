@@ -2839,11 +2839,38 @@ CXLDCRegion *cxl_find_dc_region(CXLType3Dev *ct3d, uint64_t dpa, uint64_t len)
     return NULL;
 }
 
+void cxl_insert_extent_to_extent_list_tmp(CXLDCExtentList *list,
+                                      uint64_t dpa,
+                                      uint64_t len,
+                                      uint8_t *tag,
+                                      uint16_t shared_seq,
+                                      HostMemoryBackend *host_dc,
+                                      AddressSpace host_dc_as,
+                                      int hdm_decoder_id,
+                                      struct CXLFixedWindow *fw)
+{
+    CXLDCExtent *extent;
+
+    extent = g_new0(CXLDCExtent, 1);
+    extent->start_dpa = dpa;
+    extent->len = len;
+    if (tag) {
+        memcpy(extent->tag, tag, 0x10);
+    }
+    extent->shared_seq = shared_seq;
+    extent->host_dc = host_dc; // extra
+    extent->host_dc_as = host_dc_as; // extra
+    extent->hdm_decoder_idx = hdm_decoder_id; // extra
+    extent->fw = fw;
+
+    QTAILQ_INSERT_TAIL(list, extent, node);
+}
+
 void cxl_insert_extent_to_extent_list(CXLDCExtentList *list,
-                                             uint64_t dpa,
-                                             uint64_t len,
-                                             uint8_t *tag,
-                                             uint16_t shared_seq)
+                                      uint64_t dpa,
+                                      uint64_t len,
+                                      uint8_t *tag,
+                                      uint16_t shared_seq)
 {
     CXLDCExtent *extent;
 
@@ -2863,6 +2890,31 @@ void cxl_remove_extent_from_extent_list(CXLDCExtentList *list,
 {
     QTAILQ_REMOVE(list, extent, node);
     g_free(extent);
+}
+
+/*
+ * Add a new extent to the extent "group" if group exists;
+ * otherwise, create a new group
+ * Return value: the extent group where the extent is inserted.
+ */
+CXLDCExtentGroup *cxl_insert_extent_to_extent_group_tmp(CXLDCExtentGroup *group,
+                                                    uint64_t dpa,
+                                                    uint64_t len,
+                                                    uint8_t *tag,
+                                                    uint16_t shared_seq,
+                                                    HostMemoryBackend *host_dc,
+                                                    AddressSpace host_dc_as,
+                                                    int hdm_dec_id,
+                                                    struct CXLFixedWindow *fw)
+{
+    if (!group) {
+        group = g_new0(CXLDCExtentGroup, 1);
+        QTAILQ_INIT(&group->list);
+    }
+    cxl_insert_extent_to_extent_list_tmp(&group->list, dpa, len,
+                                     tag, shared_seq, host_dc, host_dc_as,
+                                     hdm_dec_id, fw);
+    return group;
 }
 
 /*
