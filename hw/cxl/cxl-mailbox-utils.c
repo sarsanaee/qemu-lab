@@ -10,6 +10,7 @@
 #include <math.h>
 
 #include "qemu/osdep.h"
+#include "hw/cxl/cxl_device.h"
 #include "hw/pci/msi.h"
 #include "hw/pci/msix.h"
 #include "hw/cxl/cxl.h"
@@ -3148,6 +3149,107 @@ static uint32_t copy_extent_list(CXLDCExtentList *dst,
     return cnt;
 }
 
+static CXLRetCode cxl_dc_extent_release_dry_run_tmp(CXLType3Dev *ct3d,
+        const CXLUpdateDCExtentListInPl *in, CXLDCExtentList *updated_list,
+        uint32_t *updated_list_size, CXLDCExtentList *updated_removed_list,
+        uint32_t *updated_removed_size)
+{
+    CXLDCExtent *ent, *ent_next;
+    uint64_t dpa, len;
+    uint32_t i;
+    int cnt_delta = 0;
+    CXLRetCode ret = CXL_MBOX_SUCCESS;
+
+    QTAILQ_INIT(updated_list);
+    QTAILQ_INIT(updated_removed_list);
+    copy_extent_list(updated_list, &ct3d->dc.extents);
+
+    for (i = 0; i < in->num_entries_updated; i++) {
+        Range range;
+
+        dpa = in->updated_entries[i].start_dpa;
+        len = in->updated_entries[i].len;
+
+        /* Check if the DPA range is not fully backed with valid extents */
+        if (!ct3_test_region_block_backed(ct3d, dpa, len)) {
+            ret = CXL_MBOX_INVALID_PA;
+            goto free_and_exit;
+        }
+
+        /* After this point, extent overflow is the only error can happen */
+        while (len > 0) {
+            QTAILQ_FOREACH(ent, updated_list, node) {
+                range_init_nofail(&range, ent->start_dpa, ent->len);
+
+                if (range_contains(&range, dpa)) {
+                    uint64_t len1, len2 = 0, len_done = 0;
+                    uint64_t ent_start_dpa = ent->start_dpa;
+                    uint64_t ent_len = ent->len;
+
+                    len1 = dpa - ent->start_dpa;
+                    /* Found the extent or the subset of an existing extent */
+                    if (range_contains(&range, dpa + len - 1)) {
+                        len2 = ent_start_dpa + ent_len - dpa - len;
+                    } else {
+                        dpa = ent_start_dpa + ent_len;
+                    }
+                    len_done = ent_len - len1 - len2;
+
+                    cxl_remove_extent_from_extent_list(updated_list, ent);
+                    cnt_delta--;
+
+                    // I am assuming this won't be the case for me.  I will
+                    // need a list to know what are the extents that are
+                    // getting removed.
+                    cxl_insert_extent_to_extent_list_tmp(updated_removed_list,
+                                                         ent->start_dpa,
+                                                         ent->len,
+                                                         ent->tag,
+                                                         ent->shared_seq,
+                                                         ent->host_dc,
+                                                         ent->host_dc_as,
+                                                         ent->hdm_decoder_idx,
+                                                         ent->fw);
+                    *updated_removed_size++;
+
+                    if (len1) {
+                        cxl_insert_extent_to_extent_list(updated_list,
+                                                         ent_start_dpa,
+                                                         len1, NULL, 0);
+                        cnt_delta++;
+                    }
+                    if (len2) {
+                        cxl_insert_extent_to_extent_list(updated_list,
+                                                         dpa + len,
+                                                         len2, NULL, 0);
+                        cnt_delta++;
+                    }
+
+                    if (cnt_delta + ct3d->dc.total_extent_count >
+                            CXL_NUM_EXTENTS_SUPPORTED) {
+                        ret = CXL_MBOX_RESOURCES_EXHAUSTED;
+                        goto free_and_exit;
+                    }
+
+                    len -= len_done;
+                    break;
+                }
+            }
+        }
+    }
+free_and_exit:
+    if (ret != CXL_MBOX_SUCCESS) {
+        QTAILQ_FOREACH_SAFE(ent, updated_list, node, ent_next) {
+            cxl_remove_extent_from_extent_list(updated_list, ent);
+        }
+        *updated_list_size = 0;
+    } else {
+        *updated_list_size = ct3d->dc.nr_extents_accepted + cnt_delta;
+    }
+
+    return ret;
+}
+
 static CXLRetCode cxl_dc_extent_release_dry_run(CXLType3Dev *ct3d,
         const CXLUpdateDCExtentListInPl *in, CXLDCExtentList *updated_list,
         uint32_t *updated_list_size)
@@ -3194,6 +3296,10 @@ static CXLRetCode cxl_dc_extent_release_dry_run(CXLType3Dev *ct3d,
 
                     cxl_remove_extent_from_extent_list(updated_list, ent);
                     cnt_delta--;
+
+                    // I am assuming this won't be the case for me.  I will
+                    // need a list to know what are the extents that are
+                    // getting removed.
 
                     if (len1) {
                         cxl_insert_extent_to_extent_list(updated_list,
@@ -3246,8 +3352,10 @@ static CXLRetCode cmd_dcd_release_dyn_cap(const struct cxl_cmd *cmd,
     CXLUpdateDCExtentListInPl *in = (void *)payload_in;
     CXLType3Dev *ct3d = CXL_TYPE3(cci->d);
     CXLDCExtentList updated_list;
+    CXLDCExtentList updated_removed_list;
     CXLDCExtent *ent, *ent_next;
     uint32_t updated_list_size;
+    uint32_t updated_removed_size;
     CXLRetCode ret;
 
     if (len_in < sizeof(*in)) {
@@ -3268,10 +3376,21 @@ static CXLRetCode cmd_dcd_release_dyn_cap(const struct cxl_cmd *cmd,
         return ret;
     }
 
-    ret = cxl_dc_extent_release_dry_run(ct3d, in, &updated_list,
-                                        &updated_list_size);
+    ret = cxl_dc_extent_release_dry_run_tmp(ct3d, in, &updated_list,
+                                            &updated_list_size,
+                                            &updated_removed_list,
+                                            &updated_removed_size);
+
     if (ret != CXL_MBOX_SUCCESS) {
         return ret;
+    }
+
+    // Tearing down memory
+    QTAILQ_FOREACH_SAFE(ent, &updated_removed_list, node, ent_next) {
+        tear_down_memory_alias(ct3d, ent->fw, ent->hdm_decoder_idx);
+        printf("remove some memory %d and making sure the backend is gone as well\n",
+                updated_removed_size);
+        cxl_remove_extent_from_extent_list(&updated_removed_list, ent);
     }
 
     /*
