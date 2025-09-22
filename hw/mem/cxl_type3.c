@@ -2024,6 +2024,10 @@ static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
     return;
 }
 
+
+/* this function does nothing but allow for a simple check to make sure that
+ * our extent is removed.
+ */
 void qmp_cxl_release_dynamic_capacity_status(const char *path,
         uint16_t hid, uint8_t rid, const char* tag, Error **errp)
 {
@@ -2060,8 +2064,8 @@ void qmp_cxl_release_dynamic_capacity_status(const char *path,
     list = &dcd->dc.extents;
     size_t cap = 8, n = 0;
     printf("cap %lu, %lu\n", cap, n);
-    int hdm_decoder_id;
-    struct CXLFixedWindow *fw;
+    // int hdm_decoder_id;
+    // struct CXLFixedWindow *fw;
     // HostMemoryBackend *hm;
     //
     // If this is found, then we grab the information and do the rest of the stuff
@@ -2074,26 +2078,25 @@ void qmp_cxl_release_dynamic_capacity_status(const char *path,
             printf("Found extent with tag %s dpa 0x%" PRIx64
                    " len 0x%" PRIx64 "\n",
                    ent->tag, ent->start_dpa, ent->len);
-            hdm_decoder_id = ent->hdm_decoder_idx;
-            fw = ent->fw;
+            // hdm_decoder_id = ent->hdm_decoder_idx;
+            // fw = ent->fw;
             // hm = ent->host_dc;
         }
     }
 
-    // For this we need to find that FMW and then get the main memory.
-
-    // hdm_decoder_idx = ?!
-    MemoryRegion *mr = &dcd->direct_mr[hdm_decoder_id];
-    memory_region_del_subregion(&fw->mr, mr);
-    dcd->direct_inuse[hdm_decoder_id] = false;
-    g_free(mr);
-
-    // Maybe also disconnect that memory? Should we do that? I think it must be
-    // connected but just remove that memory.
-
     return;
 }
 
+void tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
+                            uint32_t hdm_id)
+{
+    MemoryRegion *mr = &dcd->direct_mr[hdm_id];
+    if (mr) {
+        memory_region_del_subregion(&fw->mr, mr);
+        dcd->direct_inuse[hdm_id] = false;
+    }
+    g_free(mr);
+}
 
 /*
  * The main function to process dynamic capacity event with extent list.
