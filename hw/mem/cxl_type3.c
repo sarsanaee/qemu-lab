@@ -34,6 +34,7 @@
 #include "hw/cxl/cxl.h"
 #include "hw/pci/msix.h"
 #include "hw/mem/tagged_mem.h"
+#include "hw/cxl/cxl_host.h"
 
 /* type3 device private */
 enum CXL_T3_MSIX_VECTOR {
@@ -2092,6 +2093,8 @@ void tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
         memory_region_del_subregion(&fw->mr, mr);
     }
     g_free(mr);
+
+    return;
 }
 
 /*

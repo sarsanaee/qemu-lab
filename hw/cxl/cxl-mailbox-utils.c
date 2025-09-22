@@ -3151,8 +3151,7 @@ static uint32_t copy_extent_list(CXLDCExtentList *dst,
 
 static CXLRetCode cxl_dc_extent_release_dry_run_tmp(CXLType3Dev *ct3d,
         const CXLUpdateDCExtentListInPl *in, CXLDCExtentList *updated_list,
-        uint32_t *updated_list_size, CXLDCExtentList *updated_removed_list,
-        uint32_t *updated_removed_size)
+        uint32_t *updated_list_size, CXLDCExtentList *updated_removed_list)
 {
     CXLDCExtent *ent, *ent_next;
     uint64_t dpa, len;
@@ -3210,8 +3209,6 @@ static CXLRetCode cxl_dc_extent_release_dry_run_tmp(CXLType3Dev *ct3d,
                                                          ent->host_dc_as,
                                                          ent->hdm_decoder_idx,
                                                          ent->fw);
-                    *updated_removed_size++;
-
                     if (len1) {
                         cxl_insert_extent_to_extent_list(updated_list,
                                                          ent_start_dpa,
@@ -3297,10 +3294,6 @@ static CXLRetCode cxl_dc_extent_release_dry_run(CXLType3Dev *ct3d,
                     cxl_remove_extent_from_extent_list(updated_list, ent);
                     cnt_delta--;
 
-                    // I am assuming this won't be the case for me.  I will
-                    // need a list to know what are the extents that are
-                    // getting removed.
-
                     if (len1) {
                         cxl_insert_extent_to_extent_list(updated_list,
                                                          ent_start_dpa,
@@ -3355,7 +3348,6 @@ static CXLRetCode cmd_dcd_release_dyn_cap(const struct cxl_cmd *cmd,
     CXLDCExtentList updated_removed_list;
     CXLDCExtent *ent, *ent_next;
     uint32_t updated_list_size;
-    uint32_t updated_removed_size;
     CXLRetCode ret;
 
     if (len_in < sizeof(*in)) {
@@ -3378,8 +3370,7 @@ static CXLRetCode cmd_dcd_release_dyn_cap(const struct cxl_cmd *cmd,
 
     ret = cxl_dc_extent_release_dry_run_tmp(ct3d, in, &updated_list,
                                             &updated_list_size,
-                                            &updated_removed_list,
-                                            &updated_removed_size);
+                                            &updated_removed_list);
 
     if (ret != CXL_MBOX_SUCCESS) {
         return ret;
@@ -3388,8 +3379,7 @@ static CXLRetCode cmd_dcd_release_dyn_cap(const struct cxl_cmd *cmd,
     // Tearing down memory
     QTAILQ_FOREACH_SAFE(ent, &updated_removed_list, node, ent_next) {
         tear_down_memory_alias(ct3d, ent->fw, ent->hdm_decoder_idx);
-        printf("remove some memory %d and making sure the backend is gone as well\n",
-                updated_removed_size);
+        printf("remove some memory and making sure the backend is gone as well\n");
         cxl_remove_extent_from_extent_list(&updated_removed_list, ent);
     }
 

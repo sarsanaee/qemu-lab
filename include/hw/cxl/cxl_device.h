@@ -771,5 +771,5 @@ bool cxl_extents_overlaps_dpa_range(CXLDCExtentList *list,
 bool cxl_extent_groups_overlaps_dpa_range(CXLDCExtentGroupList *list,
                                           uint64_t dpa, uint64_t len);
 void tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
-                            uint32_t hdm_id)
+                            uint32_t hdm_id);
 #endif
