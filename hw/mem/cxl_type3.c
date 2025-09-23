@@ -2011,8 +2011,8 @@ static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
         	memset(extents[n - 1].tag, 0, 0x10);
 
             printf("Found extent with tag %s dpa 0x%" PRIx64
-                   " len 0x%" PRIx64 "\n",
-                   ent->tag, ent->start_dpa, ent->len);
+                   " len 0x%" PRIx64 " %p \n",
+                   ent->tag, ent->start_dpa, ent->len, (void *)ent->fw);
         }
     }
 
@@ -2089,10 +2089,15 @@ void tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
                             uint32_t hdm_id)
 {
     MemoryRegion *mr = &dcd->direct_mr[hdm_id];
+
+    if (!fw) {
+        printf("We are expending a value Fix Memory Window but unfortunately it is NULL!\n");
+        return;
+    }
+
     if (mr) {
         memory_region_del_subregion(&fw->mr, mr);
     }
-    g_free(mr);
 
     return;
 }
@@ -2216,6 +2221,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         extents[i].shared_seq = 0;
 
         if (type == DC_EVENT_ADD_CAPACITY) {
+            printf("ADDED %p\n", (void *)dcd->dc.cur_fw);
+
             group = cxl_insert_extent_to_extent_group_tmp(group,
                                                       extents[i].start_dpa,
                                                       extents[i].len,
@@ -2225,7 +2232,6 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
                                                       dcd->dc.host_dc_as,
                                                       dcd->dc.cur_hdm_decoder_idx,
                                                       dcd->dc.cur_fw);
-            printf("ADDED\n");
         }
 
         list = list->next;
