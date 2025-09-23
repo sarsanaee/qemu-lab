@@ -572,6 +572,7 @@ int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
     fw = CXL_FMW(obj);
     ct3d = state->ct3d;
 
+
     if (cfmws_is_not_interleaved(fw, state->decoder_base)) {
         MemoryRegion *mr = NULL;
         uint64_t vmr_size = 0, pmr_size = 0, dc_mr_size = 0;
@@ -621,10 +622,17 @@ int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
         memory_region_add_subregion(&fw->mr,
                                     state->decoder_base - fw->base,
                                     &ct3d->direct_mr[state->hdm_decoder_idx]);
+
+        printf("CXL: Direct passthrough for decoder %d fixed memory pointer %p fixed %p\n",
+               state->hdm_decoder_idx, (void *)&fw->mr, (void *)fw);
         ct3d->direct_inuse[state->hdm_decoder_idx] = true;
         ct3d->dc.cur_hdm_decoder_idx = state->hdm_decoder_idx;
         ct3d->dc.cur_fw = fw;
+        printf("CXL: Direct passthrough for decoder %d fixed memory pointer %p fixed %p\n",
+               state->hdm_decoder_idx, (void *)&ct3d->dc.cur_fw->mr,
+               (void *)ct3d->dc.cur_fw);
     }
+
     return 0;
 }
 
