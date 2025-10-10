@@ -2095,37 +2095,38 @@ static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
 /* this function does nothing but allow for a simple check to make sure that
  * our extent is removed.
  */
-void qmp_cxl_release_dynamic_capacity_status(const char *path,
+ExtentStatus *qmp_cxl_release_dynamic_capacity_status(const char *path,
         uint16_t hid, uint8_t rid, const char* tag, Error **errp)
 {
     Object *obj;
     CXLType3Dev *dcd;
     CXLDCExtentList *list = NULL;
     CXLDCExtent *ent;
-    // g_autofree CXLDCExtentRaw *extents = NULL;
+    ExtentStatus *res = g_new0(ExtentStatus, 1);
+
 
     obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
     if (!obj) {
         error_setg(errp, "Unable to resolve CXL type 3 device");
-        return;
+        return NULL;
     }
 
     dcd = CXL_TYPE3(obj);
     if (!dcd->dc.num_regions) {
         error_setg(errp, "No dynamic capacity support from the device");
-        return;
+        return NULL;
     }
 
     // does this suppose to check if there is even an region id with that ID at
     // all?
     if (rid >= dcd->dc.num_regions) {
         error_setg(errp, "region id is too large");
-        return;
+        return NULL;
     }
 
-    if (tag) {
+    if (!tag) {
         error_setg(errp, "tag must be valid");
-        return;
+        return NULL;
     }
 
     list = &dcd->dc.extents;
@@ -2148,10 +2149,19 @@ void qmp_cxl_release_dynamic_capacity_status(const char *path,
             // hdm_decoder_id = ent->hdm_decoder_idx;
             // fw = ent->fw;
             // hm = ent->host_dc;
+            res->status = g_strdup("Not Released");
+            res->message = g_strdup_printf("Found extent with tag %s dpa 0x%"
+                                           PRIx64 " len 0x%" PRIx64 "\n",
+                                           ent->tag, ent->start_dpa,
+                                           ent->len);
+            return res;
         }
     }
 
-    return;
+
+    res->status = g_strdup("Released");
+    res->message = g_strdup_printf("Tag %s released or not found\n", tag);
+    return res;
 }
 
 void tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,

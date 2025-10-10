@@ -557,6 +557,19 @@
 }
 
 ##
+# @ExtentStatus:
+# Return object for x-tagged-mem-add and similar commands.
+#
+# @status:   String indicating the overall result, e.g. "success".
+# @message:  Human-readable description of the outcome.
+#
+# Since: 9.1
+##
+{ 'struct': 'ExtentStatus',
+      'data': { 'status': 'str', 'message': 'str' }
+}
+
+##
 # @cxl-release-dynamic-capacity-status:
 #
 # This commands checks if a tag has been released or not.
@@ -577,7 +590,7 @@
 #
 # @unstable: For now this command is subject to change.
 #
-# Since: 9.1 
+# Since: 9.1
 ##
 { 'command': 'cxl-release-dynamic-capacity-status',
   'data': { 'path': 'str',
@@ -585,5 +598,6 @@
             'region': 'uint8',
             'tag': 'str'
            },
-  'features': [ 'unstable' ]
+  'features': [ 'unstable' ],
+  'returns': 'ExtentStatus'
 }
