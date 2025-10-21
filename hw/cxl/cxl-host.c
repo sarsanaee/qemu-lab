@@ -367,7 +367,7 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
 
     if (state->commit) {
         MemoryRegion *mr = NULL;
-        uint64_t vmr_size = 0, pmr_size = 0;
+        uint64_t vmr_size = 0, pmr_size = 0, dc_mr_size = 0;
         uint64_t offset = 0;
 
         if (ct3d->hostvmem) {
@@ -387,6 +387,17 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
             }
         }
 
+		// not sure about ctd3->dc.host_dc part here
+        if (!mr && ct3d->dc.host_dc) {
+            MemoryRegion *dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
+            dc_mr_size = memory_region_size(dc_mr);
+
+            if (state->dpa_base - vmr_size - pmr_size < dc_mr_size) {
+                mr = dc_mr;
+                offset = state->dpa_base - vmr_size - pmr_size;
+            }
+        }
+
         if (!mr) {
             return 0;
         }
@@ -401,6 +412,12 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
         memory_region_add_subregion(&fw->mr,
                                     state->decoder_base - fw->base,
                                     &ct3d->direct_mr[state->hdm_decoder_idx]);
+
+        // These two assignments are important.
+        ct3d->dc.cur_hdm_decoder_idx = state->hdm_decoder_idx;
+        ct3d->dc.cur_fw = fw;
+        printf("CXL: Direct passthrough committed for decoder %d\n",
+               state->hdm_decoder_idx);
     } else {
         if (memory_region_is_mapped(&ct3d->direct_mr[state->hdm_decoder_idx])) {
             memory_region_del_subregion(&fw->mr,

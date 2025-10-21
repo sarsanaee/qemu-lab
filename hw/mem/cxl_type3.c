@@ -743,11 +743,15 @@ static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
         return false;
     }
 
+    // this if statement must be changed! because this call can be made multiple times, and that's OK if this is already mapped.
+    // We can later unmap it when there is not capacity left. In terms of maybe extents.
     if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
-        error_setg(
-            errp, "memory backend %s can't be used multiple times.",
-            object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
-        return false;
+        // error_setg(
+        //     errp, "memory backend %s can't be used multiple times.",
+        //     object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
+        printf("Warning: memory backend %s is already mapped. Reusing it.\n",
+               object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
+        return true;
     }
 
     /*
@@ -762,9 +766,9 @@ static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
     } else {
         dc_name = g_strdup("cxl-dcd-dpa-dc-space");
     }
-    
-    cfmws_update_non_interleaved(true);
+
     address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
+    cfmws_update_non_interleaved(true);
     g_free(dc_name);
     return true;
 }
@@ -2001,6 +2005,11 @@ static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
     extents = g_new0(CXLDCExtentRaw, cap);
     QTAILQ_FOREACH (ent, list, node) {
         // if (tag && memcmp(ent->tag, tag, strlen(tag) + 1) == 0) {
+        /*
+         * assuming tag is just matches. By invocation of this function,
+         * you will remove all of the extents for a device.  But it must
+         * remove only the extents that match the tag.
+         */
         if (true) {
             if (n == cap) {
                 cap = cap < 8 ? 8 : cap * 2;
@@ -2149,7 +2158,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         return;
     }
 
-    if (!dcd->dc.host_dc && type == DC_EVENT_ADD_CAPACITY) {
+    // if (!dcd->dc.host_dc && type == DC_EVENT_ADD_CAPACITY) {
+    if (type == DC_EVENT_ADD_CAPACITY) {
         if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
             return;
         }

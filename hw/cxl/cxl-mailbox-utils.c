@@ -2962,7 +2962,7 @@ static bool cxl_extent_find_extent_detail(CXLDCExtentGroupList *list,
     QTAILQ_FOREACH_SAFE(ent, &group->list, node, ent_next) {
         // cxl_remove_extent_from_extent_list(&group->list, ent);
         // not sure if I should check more stuff but let's say this is only these two.
-        if (ent->start_dpa == 0 && ent->len == len) {
+        if (ent->start_dpa == start_dpa && ent->len == len) {
             *fw = ent->fw;
             *decoder_id = ent->hdm_decoder_idx;
             *host_dc = ent->host_dc;
@@ -3158,10 +3158,9 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
         // include those information in the insert extent function so please
         // adjust the function so that I can have all address space and
         // everything else
-
-        found = cxl_extent_find_extent_detail(&ct3d->dc.extents_pending, dpa, len,
-                                      tag, &host_dc, &host_dc_as, &fw,
-                                      &hdm_decoder_id);
+        found = cxl_extent_find_extent_detail(&ct3d->dc.extents_pending, dpa, 
+                                              len, tag, &host_dc, &host_dc_as,
+                                              &fw, &hdm_decoder_id);
 
         if (!found) {
             printf("Could not find the extent detail for DPA 0x%" PRIx64
@@ -3172,7 +3171,8 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
 
         // cxl_insert_extent_to_extent_list(extent_list, dpa, len, NULL, 0);
         cxl_insert_extent_to_extent_list_tmp(extent_list, dpa, len,
-                                         tag, 0, host_dc, host_dc_as, hdm_decoder_id, fw);
+                                             tag, 0, host_dc, host_dc_as, 
+                                             hdm_decoder_id, fw);
         ct3d->dc.total_extent_count += 1;
         ct3d->dc.nr_extents_accepted += 1;
         ct3_set_region_block_backed(ct3d, dpa, len);
