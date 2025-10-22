@@ -6,22 +6,22 @@
  */
 
 #include "qemu/osdep.h"
-#include "qemu/units.h"
+#include "hw/boards.h"
+#include "qapi/error.h"
 #include "qemu/bitmap.h"
 #include "qemu/error-report.h"
-#include "qapi/error.h"
-#include "system/qtest.h"
-#include "hw/boards.h"
 #include "qemu/log.h"
+#include "qemu/units.h"
+#include "system/qtest.h"
 
-#include "qapi/qapi-visit-machine.h"
 #include "hw/cxl/cxl.h"
 #include "hw/cxl/cxl_host.h"
-#include "hw/pci/pci_bus.h"
+#include "hw/pci-bridge/pci_expander_bridge.h"
 #include "hw/pci/pci_bridge.h"
+#include "hw/pci/pci_bus.h"
 #include "hw/pci/pci_host.h"
 #include "hw/pci/pcie_port.h"
-#include "hw/pci-bridge/pci_expander_bridge.h"
+#include "qapi/qapi-visit-machine.h"
 
 static void cxl_fixed_memory_window_config(CXLFixedMemoryWindowOptions *object,
                                            int index, Error **errp)
@@ -44,16 +44,16 @@ static void cxl_fixed_memory_window_config(CXLFixedMemoryWindowOptions *object,
     }
 
     if (object->size % (256 * MiB)) {
-        error_setg(errp,
-                   "Size of a CXL fixed memory window must be a multiple of 256MiB");
+        error_setg(
+            errp,
+            "Size of a CXL fixed memory window must be a multiple of 256MiB");
         return;
     }
     fw->size = object->size;
 
     if (object->has_interleave_granularity) {
-        fw->enc_int_gran =
-            cxl_interleave_granularity_enc(object->interleave_granularity,
-                                           errp);
+        fw->enc_int_gran = cxl_interleave_granularity_enc(
+            object->interleave_granularity, errp);
         if (*errp) {
             return;
         }
@@ -86,8 +86,7 @@ static int cxl_fmws_link(Object *obj, void *opaque)
         Object *o;
         bool ambig;
 
-        o = object_resolve_path_type(fw->targets[i], TYPE_PXB_CXL_DEV,
-                                     &ambig);
+        o = object_resolve_path_type(fw->targets[i], TYPE_PXB_CXL_DEV, &ambig);
         if (!o) {
             error_setg(errp, "Could not resolve CXLFM target %s",
                        fw->targets[i]);
@@ -114,9 +113,8 @@ static bool cxl_hdm_find_target(uint32_t *cache_mem, hwaddr addr,
     uint32_t cap;
 
     cap = ldl_le_p(cache_mem + R_CXL_HDM_DECODER_CAPABILITY);
-    hdm_count = cxl_decoder_count_dec(FIELD_EX32(cap,
-                                                 CXL_HDM_DECODER_CAPABILITY,
-                                                 DECODER_COUNT));
+    hdm_count = cxl_decoder_count_dec(
+        FIELD_EX32(cap, CXL_HDM_DECODER_CAPABILITY, DECODER_COUNT));
     for (i = 0; i < hdm_count; i++) {
         uint32_t ctrl, ig_enc, iw_enc, target_idx;
         uint32_t low, high;
@@ -147,14 +145,12 @@ static bool cxl_hdm_find_target(uint32_t *cache_mem, hwaddr addr,
         target_idx = (addr / cxl_decode_ig(ig_enc)) % (1 << iw_enc);
 
         if (target_idx < 4) {
-            uint32_t val = ldl_le_p(cache_mem +
-                                    R_CXL_HDM_DECODER0_TARGET_LIST_LO +
-                                    i * hdm_inc);
+            uint32_t val = ldl_le_p(
+                cache_mem + R_CXL_HDM_DECODER0_TARGET_LIST_LO + i * hdm_inc);
             *target = extract32(val, target_idx * 8, 8);
         } else {
-            uint32_t val = ldl_le_p(cache_mem +
-                                    R_CXL_HDM_DECODER0_TARGET_LIST_HI +
-                                    i * hdm_inc);
+            uint32_t val = ldl_le_p(
+                cache_mem + R_CXL_HDM_DECODER0_TARGET_LIST_HI + i * hdm_inc);
             *target = extract32(val, (target_idx - 4) * 8, 8);
         }
         break;
@@ -285,8 +281,8 @@ static bool cfmws_is_not_interleaved(CXLFixedWindow *fw, hwaddr addr)
         }
         cache_mem = hb_cstate->crb.cache_mem_registers;
 
-        target_found = cxl_hdm_find_target(cache_mem, addr, &target,
-                                           &interleaved);
+        target_found =
+            cxl_hdm_find_target(cache_mem, addr, &target, &interleaved);
         if (!target_found) {
             return false;
         }
@@ -323,8 +319,7 @@ static bool cfmws_is_not_interleaved(CXLFixedWindow *fw, hwaddr addr)
 
     cache_mem = usp_cstate->crb.cache_mem_registers;
 
-    target_found = cxl_hdm_find_target(cache_mem, addr, &target,
-                                       &interleaved);
+    target_found = cxl_hdm_find_target(cache_mem, addr, &target, &interleaved);
     if (!target_found) {
         return false;
     }
@@ -387,14 +382,22 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
             }
         }
 
-		// not sure about ctd3->dc.host_dc part here
+        // not sure about ctd3->dc.host_dc part here
         if (!mr && ct3d->dc.host_dc) {
-            MemoryRegion *dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
+            MemoryRegion *dc_mr =
+                host_memory_backend_get_memory(ct3d->dc.host_dc);
             dc_mr_size = memory_region_size(dc_mr);
 
             if (state->dpa_base - vmr_size - pmr_size < dc_mr_size) {
                 mr = dc_mr;
                 offset = state->dpa_base - vmr_size - pmr_size;
+
+                ct3d->dc.cur_hdm_decoder_idx = ct3d->direct_mr_count;
+                ct3d->direct_mr_count = (ct3d->direct_mr_count + 1) % CXL_HDM_DECODER_COUNT;
+                ct3d->dc.cur_fw = fw;
+                state->hdm_decoder_idx = ct3d->dc.cur_hdm_decoder_idx;
+                // ct3d->dc.cur_hdm_decoder_idx = state->hdm_decoder_idx;
+                printf("is it going in here the second time?\n");
             }
         }
 
@@ -402,26 +405,25 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
             return 0;
         }
 
+        printf("CXL: Committing direct passthrough for decoder %d %lu %lu %d\n",
+               state->hdm_decoder_idx, offset, dc_mr_size, CXL_HDM_DECODER_COUNT);
+
         if (memory_region_is_mapped(&ct3d->direct_mr[state->hdm_decoder_idx])) {
             return 0;
         }
 
+        printf("here\n");
         memory_region_init_alias(&ct3d->direct_mr[state->hdm_decoder_idx],
                                  OBJECT(ct3d), "direct-mapping", mr, offset,
                                  state->decoder_size);
-        memory_region_add_subregion(&fw->mr,
-                                    state->decoder_base - fw->base,
+        printf("here1 %lu %lu %lu\n", state->decoder_size, state->decoder_base, fw->base);
+        memory_region_add_subregion(&fw->mr, state->decoder_base - fw->base,
                                     &ct3d->direct_mr[state->hdm_decoder_idx]);
-
-        // These two assignments are important.
-        ct3d->dc.cur_hdm_decoder_idx = state->hdm_decoder_idx;
-        ct3d->dc.cur_fw = fw;
-        printf("CXL: Direct passthrough committed for decoder %d\n",
-               state->hdm_decoder_idx);
+        printf("here2\n");
     } else {
         if (memory_region_is_mapped(&ct3d->direct_mr[state->hdm_decoder_idx])) {
-            memory_region_del_subregion(&fw->mr,
-                &ct3d->direct_mr[state->hdm_decoder_idx]);
+            memory_region_del_subregion(
+                &fw->mr, &ct3d->direct_mr[state->hdm_decoder_idx]);
         }
     }
 
@@ -436,7 +438,7 @@ static int update_non_interleaved(Object *obj, void *opaque)
     uint32_t cap;
     int hdm_inc = R_CXL_HDM_DECODER1_BASE_LO - R_CXL_HDM_DECODER0_BASE_LO;
     uint64_t dpa_base = 0;
-    bool commit = *(bool *) opaque;
+    bool commit = *(bool *)opaque;
 
     if (!object_dynamic_cast(obj, TYPE_CXL_TYPE3)) {
         return 0;
@@ -449,9 +451,8 @@ static int update_non_interleaved(Object *obj, void *opaque)
      * (non interleaved).
      */
     cap = ldl_le_p(cache_mem + R_CXL_HDM_DECODER_CAPABILITY);
-    hdm_count = cxl_decoder_count_dec(FIELD_EX32(cap,
-                                                 CXL_HDM_DECODER_CAPABILITY,
-                                                 DECODER_COUNT));
+    hdm_count = cxl_decoder_count_dec(
+        FIELD_EX32(cap, CXL_HDM_DECODER_CAPABILITY, DECODER_COUNT));
 
     /* Now for each committed HDM decoder */
     for (i = 0; i < hdm_count; i++) {
@@ -475,10 +476,10 @@ static int update_non_interleaved(Object *obj, void *opaque)
          * Even if this decoder is interleaved need to keep track of DPA as the
          * next HDM decoder may not be interleaved.
          */
-        low = ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_DPA_SKIP_LO +
-                       i * hdm_inc);
-        high = ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_DPA_SKIP_HI +
-                        i * hdm_inc);
+        low =
+            ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_DPA_SKIP_LO + i * hdm_inc);
+        high =
+            ldl_le_p(cache_mem + R_CXL_HDM_DECODER0_DPA_SKIP_HI + i * hdm_inc);
         skip = ((uint64_t)high << 32) | (low & 0xf0000000);
         dpa_base += skip;
 
@@ -510,7 +511,6 @@ static int update_non_interleaved(Object *obj, void *opaque)
                                            cxl_fmws_direct_passthrough, &state);
         }
         dpa_base += decoder_size / cxl_interleave_ways_dec(iw, &error_fatal);
-
     }
     return 0;
 }
@@ -521,8 +521,8 @@ bool cfmws_update_non_interleaved(bool commit)
      * Walk endpoints to find committed decoders then check if they are not
      * interleaved (but path full is set up).
      */
-    object_child_foreach_recursive(object_get_root(),
-                                   update_non_interleaved, &commit);
+    object_child_foreach_recursive(object_get_root(), update_non_interleaved,
+                                   &commit);
 
     return false;
 }
@@ -543,9 +543,8 @@ static MemTxResult cxl_read_cfmws(void *opaque, hwaddr addr, uint64_t *data,
     return cxl_type3_read(d, addr + fw->base, data, size, attrs);
 }
 
-static MemTxResult cxl_write_cfmws(void *opaque, hwaddr addr,
-                                   uint64_t data, unsigned size,
-                                   MemTxAttrs attrs)
+static MemTxResult cxl_write_cfmws(void *opaque, hwaddr addr, uint64_t data,
+                                   unsigned size, MemTxAttrs attrs)
 {
     CXLFixedWindow *fw = opaque;
     PCIDevice *d;
@@ -626,15 +625,14 @@ static void machine_set_cfmw(Object *obj, Visitor *v, const char *name,
 
 void cxl_machine_init(Object *obj, CXLState *state)
 {
-    object_property_add(obj, "cxl", "bool", machine_get_cxl,
-                        machine_set_cxl, NULL, state);
+    object_property_add(obj, "cxl", "bool", machine_get_cxl, machine_set_cxl,
+                        NULL, state);
     object_property_set_description(obj, "cxl",
                                     "Set on/off to enable/disable "
                                     "CXL instantiation");
 
     object_property_add(obj, "cxl-fmw", "CXLFixedMemoryWindow",
-                        machine_get_cfmw, machine_set_cfmw,
-                        NULL, state);
+                        machine_get_cfmw, machine_set_cfmw, NULL, state);
     object_property_set_description(obj, "cxl-fmw",
                                     "CXL Fixed Memory Windows (array)");
 }
@@ -643,7 +641,7 @@ void cxl_hook_up_pxb_registers(PCIBus *bus, CXLState *state, Error **errp)
 {
     /* Walk the pci busses looking for pxb busses to hook up */
     if (bus) {
-        QLIST_FOREACH(bus, &bus->child, sibling) {
+        QLIST_FOREACH (bus, &bus->child, sibling) {
             if (!pci_bus_is_root(bus)) {
                 continue;
             }

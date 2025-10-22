@@ -590,6 +590,7 @@ struct CXLType3Dev {
 
     /* State */
     MemoryRegion direct_mr[CXL_HDM_DECODER_COUNT];
+    int direct_mr_count;
     AddressSpace hostvmem_as;
     AddressSpace hostpmem_as;
     CXLComponentState cxl_cstate;
