@@ -590,7 +590,7 @@ struct CXLType3Dev {
 
     /* State */
     MemoryRegion direct_mr[CXL_HDM_DECODER_COUNT];
-    int direct_mr_count;
+    bool direct_mapping_supported;
     AddressSpace hostvmem_as;
     AddressSpace hostpmem_as;
     CXLComponentState cxl_cstate;
@@ -632,7 +632,8 @@ struct CXLType3Dev {
     CXLMemECSWriteAttrs ecs_wr_attrs;
 
     struct dynamic_capacity {
-        HostMemoryBackend *host_dc;
+        HostMemoryBackend *host_dc; // tmp
+        MemoryRegion dc_mr_root;
         AddressSpace host_dc_as;
         int cur_hdm_decoder_idx;
         struct CXLFixedWindow *cur_fw;
@@ -650,6 +651,8 @@ struct CXLType3Dev {
 
         uint8_t num_regions; /* 0-8 regions */
         CXLDCRegion regions[DCD_MAX_NUM_REGION];
+        int direct_mr_count;
+        uint64_t total_offset;
     } dc;
 
     struct CXLSanitizeInfo *media_op_sanitize;

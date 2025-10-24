@@ -13,6 +13,7 @@
 #include "qemu/log.h"
 #include "qemu/units.h"
 #include "system/qtest.h"
+#include <stdio.h>
 
 #include "hw/cxl/cxl.h"
 #include "hw/cxl/cxl_host.h"
@@ -349,6 +350,7 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
     struct cxl_direct_pt_state *state = opaque;
     struct CXLFixedWindow *fw;
     CXLType3Dev *ct3d = state->ct3d;
+    char *direct_mapping_name;
 
     if (!object_dynamic_cast(obj, TYPE_CXL_FMW)) {
         return 0;
@@ -356,9 +358,12 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
 
     fw = CXL_FMW(obj);
 
+    // important bit
     if (!cfmws_is_not_interleaved(fw, state->decoder_base)) {
         return 0;
     }
+
+    ct3d->direct_mapping_supported = true;
 
     if (state->commit) {
         MemoryRegion *mr = NULL;
@@ -392,34 +397,55 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
                 mr = dc_mr;
                 offset = state->dpa_base - vmr_size - pmr_size;
 
-                ct3d->dc.cur_hdm_decoder_idx = ct3d->direct_mr_count;
-                ct3d->direct_mr_count = (ct3d->direct_mr_count + 1) % CXL_HDM_DECODER_COUNT;
+                ct3d->dc.cur_hdm_decoder_idx = ct3d->dc.direct_mr_count;
+                ct3d->dc.direct_mr_count =
+                    (ct3d->dc.direct_mr_count + 1) % CXL_HDM_DECODER_COUNT;
                 ct3d->dc.cur_fw = fw;
                 state->hdm_decoder_idx = ct3d->dc.cur_hdm_decoder_idx;
-                // ct3d->dc.cur_hdm_decoder_idx = state->hdm_decoder_idx;
-                printf("is it going in here the second time?\n");
             }
         }
 
         if (!mr) {
+            // This is the bail out when we commit and in DC scenario, we have
+            // not added any extents yet.
             return 0;
         }
-
-        printf("CXL: Committing direct passthrough for decoder %d %lu %lu %d\n",
-               state->hdm_decoder_idx, offset, dc_mr_size, CXL_HDM_DECODER_COUNT);
 
         if (memory_region_is_mapped(&ct3d->direct_mr[state->hdm_decoder_idx])) {
             return 0;
         }
 
-        printf("here\n");
+        direct_mapping_name =
+            g_strdup_printf("cxl-direct-mapping-%d", state->hdm_decoder_idx);
         memory_region_init_alias(&ct3d->direct_mr[state->hdm_decoder_idx],
-                                 OBJECT(ct3d), "direct-mapping", mr, offset,
+                                 OBJECT(ct3d), direct_mapping_name, mr, offset,
                                  state->decoder_size);
-        printf("here1 %lu %lu %lu\n", state->decoder_size, state->decoder_base, fw->base);
-        memory_region_add_subregion(&fw->mr, state->decoder_base - fw->base,
-                                    &ct3d->direct_mr[state->hdm_decoder_idx]);
-        printf("here2\n");
+
+
+
+        assert(dc_mr_size);
+        assert(offset + dc_mr_size <= dc_mr_size);
+        assert(state->decoder_base - fw->base + dc_mr_size <= memory_region_size(&fw->mr));
+
+
+        // Print all of the values to understand exactly what's going on.
+        // printf("Direct mapping details:\n");
+        // printf("  Decoder base: 0x%lx\n", state->decoder_base);
+        // printf("  Decoder size: 0x%lx\n", state->decoder_size);
+        // printf("  DPA base: 0x%lx\n", state->dpa_base);
+        // printf("  Offset in MR: 0x%lx\n", offset);
+        // printf("  DC MR size: 0x%lx\n", dc_mr_size);
+        // printf("  FW base: 0x%lx\n", fw->base);
+        // printf("  FW size: 0x%lx\n", memory_region_size(&fw->mr));
+        // printf("  DC total offset before: 0x%lx\n", ct3d->dc.total_offset);
+        // printf("  DC total capacity CMD: 0x%lx\n", ct3d->dc.total_capacity_cmd);
+
+        memory_region_add_subregion(
+            &fw->mr, state->decoder_base - fw->base + ct3d->dc.total_offset,
+            &ct3d->direct_mr[state->hdm_decoder_idx]);
+
+        // ct3d->dc.total_offset += dc_mr_size;
+        g_free(direct_mapping_name);
     } else {
         if (memory_region_is_mapped(&ct3d->direct_mr[state->hdm_decoder_idx])) {
             memory_region_del_subregion(

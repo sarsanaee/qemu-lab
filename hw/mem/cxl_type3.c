@@ -767,7 +767,19 @@ static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
         dc_name = g_strdup("cxl-dcd-dpa-dc-space");
     }
 
-    address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
+    memory_region_add_subregion(&ct3d->dc.dc_mr_root, ct3d->dc.total_offset,
+                                dc_mr);
+    // ct3d->dc.total_offset += memory_region_size(dc_mr);
+
+    // if (i == 0) {
+    //     address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
+    //     i++;
+    // } 
+    
+    // else {
+    //     address_space_init(&ct3d->dc.host_dc_as2, dc_mr, dc_name);
+    // }
+    
     cfmws_update_non_interleaved(true);
     g_free(dc_name);
     return true;
@@ -858,6 +870,11 @@ static bool cxl_setup_memory(CXLType3Dev *ct3d, Error **errp)
             error_append_hint(errp, "setup DC regions failed");
             return false;
         }
+
+        memory_region_init(&ct3d->dc.dc_mr_root, OBJECT(ct3d), "agg-root",
+                           UINT64_MAX);
+        address_space_init(&ct3d->dc.host_dc_as, &ct3d->dc.dc_mr_root, "my-as");
+
     }
 
     return true;
@@ -2118,6 +2135,7 @@ void tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
 
     if (mr) {
         memory_region_del_subregion(&fw->mr, mr);
+        // memory_region_del_subregion(&dcd->dc.dc_mr_root, mr);
     }
 
     return;
@@ -2137,7 +2155,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
     CxlDynamicCapacityExtentList *list;
     CXLDCExtentGroup *group = NULL;
     g_autofree CXLDCExtentRaw *extents = NULL;
-    uint64_t dpa, offset, len, block_size;
+    uint64_t dpa, offset, len = 0, block_size;
     g_autofree unsigned long *blk_bitmap = NULL;
     int i;
 
@@ -2156,13 +2174,6 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
     if (rid >= dcd->dc.num_regions) {
         error_setg(errp, "region id is too large");
         return;
-    }
-
-    // if (!dcd->dc.host_dc && type == DC_EVENT_ADD_CAPACITY) {
-    if (type == DC_EVENT_ADD_CAPACITY) {
-        if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
-            return;
-        }
     }
 
     block_size = dcd->dc.regions[rid].block_size;
@@ -2225,6 +2236,35 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         }
         list = list->next;
 		num_extents++;
+        dcd->dc.total_offset = offset;
+    }
+
+    // here we still do not know what the offsets are.
+    if (type == DC_EVENT_ADD_CAPACITY) {
+        MemoryRegion *host_dc_mr;
+        uint64_t size;
+
+        if (num_extents > 1) {
+            error_setg(errp,
+                       "Only single extent add is supported currently");
+            return;
+        }
+
+        if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
+            return;
+        }
+
+        host_dc_mr = host_memory_backend_get_memory(dcd->dc.host_dc);
+        size = memory_region_size(host_dc_mr);
+
+        if (size != len) {
+            error_setg(errp,
+                       "Host memory backend size 0x%" PRIx64
+                       " does not match extent length 0x%" PRIx64,
+                       size, len);
+            return;
+        }
+
     }
 
     /* Create extent list for event being passed to host */
@@ -2254,6 +2294,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
                                                       dcd->dc.host_dc_as,
                                                       dcd->dc.cur_hdm_decoder_idx,
                                                       dcd->dc.cur_fw);
+            // dcd->dc.total_offset += offset + len; // assuming no holes;
         }
 
         list = list->next;
