@@ -525,6 +525,7 @@ typedef struct CXLDCExtent {
     AddressSpace host_dc_as;
     int hdm_decoder_idx;
     struct CXLFixedWindow *fw;
+    int rid;
 
     QTAILQ_ENTRY(CXLDCExtent) node;
 } CXLDCExtent;
@@ -638,6 +639,12 @@ struct CXLType3Dev {
         int cur_hdm_decoder_idx;
         struct CXLFixedWindow *cur_fw;
         uint64_t total_capacity_cmd; /* 256M aligned */
+        MemoryRegion dc_direct_mr[CXL_HDM_DECODER_COUNT];
+
+        struct decoder_window {
+            hwaddr base;
+            hwaddr size;
+        } dc_decoder_window;
         /*
          * total_capacity is equivalent to the dynamic capability
          * memory region size.
@@ -732,7 +739,8 @@ void cxl_insert_extent_to_extent_list_tmp(CXLDCExtentList *list, uint64_t dpa,
                                       HostMemoryBackend *host_dc,
                                       AddressSpace host_dc_as,
                                       int id,
-                                      struct CXLFixedWindow *fw);
+                                      struct CXLFixedWindow *fw,
+                                      int rid);
 
 bool test_any_bits_set(const unsigned long *addr, unsigned long nr,
                        unsigned long size);
@@ -752,7 +760,8 @@ CXLDCExtentGroup *cxl_insert_extent_to_extent_group_tmp(CXLDCExtentGroup *group,
                                                     HostMemoryBackend *host_dc,
                                                     AddressSpace host_dc_as,
                                                     int id,
-                                                    struct CXLFixedWindow *fw);
+                                                    struct CXLFixedWindow *fw,
+                                                    int rid);
 
 void cxl_extent_group_list_insert_tail(CXLDCExtentGroupList *list,
                                        CXLDCExtentGroup *group);
@@ -774,6 +783,6 @@ bool cxl_extents_overlaps_dpa_range(CXLDCExtentList *list,
                                     uint64_t dpa, uint64_t len);
 bool cxl_extent_groups_overlaps_dpa_range(CXLDCExtentGroupList *list,
                                           uint64_t dpa, uint64_t len);
-void tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
-                            uint32_t hdm_id);
+void cxl_tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
+                                uint32_t hdm_id);
 #endif

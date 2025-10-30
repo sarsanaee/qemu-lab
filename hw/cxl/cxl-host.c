@@ -358,8 +358,8 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
 
     fw = CXL_FMW(obj);
 
-    // important bit
     if (!cfmws_is_not_interleaved(fw, state->decoder_base)) {
+        ct3d->direct_mapping_supported = false;
         return 0;
     }
 
@@ -387,7 +387,6 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
             }
         }
 
-        // not sure about ctd3->dc.host_dc part here
         if (!mr && ct3d->dc.host_dc) {
             MemoryRegion *dc_mr =
                 host_memory_backend_get_memory(ct3d->dc.host_dc);
@@ -396,18 +395,13 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
             if (state->dpa_base - vmr_size - pmr_size < dc_mr_size) {
                 mr = dc_mr;
                 offset = state->dpa_base - vmr_size - pmr_size;
-
-                ct3d->dc.cur_hdm_decoder_idx = ct3d->dc.direct_mr_count;
-                ct3d->dc.direct_mr_count =
-                    (ct3d->dc.direct_mr_count + 1) % CXL_HDM_DECODER_COUNT;
                 ct3d->dc.cur_fw = fw;
-                state->hdm_decoder_idx = ct3d->dc.cur_hdm_decoder_idx;
+                ct3d->dc.dc_decoder_window.base = state->decoder_base;
+                ct3d->dc.dc_decoder_window.size = state->decoder_size;
             }
         }
 
         if (!mr) {
-            // This is the bail out when we commit and in DC scenario, we have
-            // not added any extents yet.
             return 0;
         }
 
@@ -415,36 +409,15 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
             return 0;
         }
 
-        direct_mapping_name =
-            g_strdup_printf("cxl-direct-mapping-%d", state->hdm_decoder_idx);
+        direct_mapping_name = g_strdup_printf("cxl-non-dc--direct-mapping-%d",
+                                              state->hdm_decoder_idx);
         memory_region_init_alias(&ct3d->direct_mr[state->hdm_decoder_idx],
                                  OBJECT(ct3d), direct_mapping_name, mr, offset,
                                  state->decoder_size);
 
+        memory_region_add_subregion(&fw->mr, state->decoder_base - fw->base,
+                                    &ct3d->direct_mr[state->hdm_decoder_idx]);
 
-
-        assert(dc_mr_size);
-        assert(offset + dc_mr_size <= dc_mr_size);
-        assert(state->decoder_base - fw->base + dc_mr_size <= memory_region_size(&fw->mr));
-
-
-        // Print all of the values to understand exactly what's going on.
-        // printf("Direct mapping details:\n");
-        // printf("  Decoder base: 0x%lx\n", state->decoder_base);
-        // printf("  Decoder size: 0x%lx\n", state->decoder_size);
-        // printf("  DPA base: 0x%lx\n", state->dpa_base);
-        // printf("  Offset in MR: 0x%lx\n", offset);
-        // printf("  DC MR size: 0x%lx\n", dc_mr_size);
-        // printf("  FW base: 0x%lx\n", fw->base);
-        // printf("  FW size: 0x%lx\n", memory_region_size(&fw->mr));
-        // printf("  DC total offset before: 0x%lx\n", ct3d->dc.total_offset);
-        // printf("  DC total capacity CMD: 0x%lx\n", ct3d->dc.total_capacity_cmd);
-
-        memory_region_add_subregion(
-            &fw->mr, state->decoder_base - fw->base + ct3d->dc.total_offset,
-            &ct3d->direct_mr[state->hdm_decoder_idx]);
-
-        // ct3d->dc.total_offset += dc_mr_size;
         g_free(direct_mapping_name);
     } else {
         if (memory_region_is_mapped(&ct3d->direct_mr[state->hdm_decoder_idx])) {

@@ -7,6 +7,7 @@
  * COPYING file in the top-level directory.
  */
 
+// #include "system/memory.h"
 #include <math.h>
 
 #include "qemu/osdep.h"
@@ -25,6 +26,7 @@
 #include "qemu/units.h"
 #include "qemu/uuid.h"
 #include "system/hostmem.h"
+// #include <stdint.h>
 #include "qemu/range.h"
 #include "qapi/qapi-types-cxl.h"
 
@@ -2849,7 +2851,8 @@ void cxl_insert_extent_to_extent_list_tmp(CXLDCExtentList *list,
                                       HostMemoryBackend *host_dc,
                                       AddressSpace host_dc_as,
                                       int hdm_decoder_id,
-                                      struct CXLFixedWindow *fw)
+                                      struct CXLFixedWindow *fw,
+                                      int rid)
 {
     CXLDCExtent *extent;
 
@@ -2864,8 +2867,7 @@ void cxl_insert_extent_to_extent_list_tmp(CXLDCExtentList *list,
     extent->host_dc_as = host_dc_as; // extra
     extent->hdm_decoder_idx = hdm_decoder_id; // extra
     extent->fw = fw;
-    printf("Extent fixed memory window just before adding to the list: %p\n",
-           (void *)extent->fw);
+    extent->rid = rid;
 
     QTAILQ_INSERT_TAIL(list, extent, node);
 }
@@ -2909,7 +2911,8 @@ CXLDCExtentGroup *cxl_insert_extent_to_extent_group_tmp(CXLDCExtentGroup *group,
                                                     HostMemoryBackend *host_dc,
                                                     AddressSpace host_dc_as,
                                                     int hdm_dec_id,
-                                                    struct CXLFixedWindow *fw)
+                                                    struct CXLFixedWindow *fw,
+                                                    int rid)
 {
     if (!group) {
         group = g_new0(CXLDCExtentGroup, 1);
@@ -2917,7 +2920,7 @@ CXLDCExtentGroup *cxl_insert_extent_to_extent_group_tmp(CXLDCExtentGroup *group,
     }
     cxl_insert_extent_to_extent_list_tmp(&group->list, dpa, len,
                                      tag, shared_seq, host_dc, host_dc_as,
-                                     hdm_dec_id, fw);
+                                     hdm_dec_id, fw, rid);
     return group;
 }
 
@@ -2954,7 +2957,8 @@ static bool cxl_extent_find_extent_detail(CXLDCExtentGroupList *list,
                                           HostMemoryBackend **host_dc,
                                           AddressSpace *host_dc_as,
                                           struct CXLFixedWindow **fw,
-                                          int *decoder_id)
+                                          int *decoder_id,
+                                          int *rid)
 {
     CXLDCExtent *ent, *ent_next;
     CXLDCExtentGroup *group = QTAILQ_FIRST(list);
@@ -2968,6 +2972,7 @@ static bool cxl_extent_find_extent_detail(CXLDCExtentGroupList *list,
             *host_dc = ent->host_dc;
             *host_dc_as = ent->host_dc_as;
             memcpy(tag, ent->tag, 0x10);
+            *rid = ent->rid;
             return true;
         }
     }
@@ -3114,7 +3119,9 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
     uint8_t tag[0x10];
     uint32_t i, num;
     uint64_t dpa, len;
+    int rid;
     CXLRetCode ret;
+    char *direct_mapping_name;
 
     if (len_in < sizeof(*in)) {
         return CXL_MBOX_INVALID_PAYLOAD_LENGTH;
@@ -3149,6 +3156,7 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
 
     for (i = 0; i < in->num_entries_updated; i++) {
         bool found;
+        MemoryRegion *mr;
         dpa = in->updated_entries[i].start_dpa;
         len = in->updated_entries[i].len;
 
@@ -3158,21 +3166,61 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
         // include those information in the insert extent function so please
         // adjust the function so that I can have all address space and
         // everything else
-        found = cxl_extent_find_extent_detail(&ct3d->dc.extents_pending, dpa, 
+        found = cxl_extent_find_extent_detail(&ct3d->dc.extents_pending, dpa,
                                               len, tag, &host_dc, &host_dc_as,
-                                              &fw, &hdm_decoder_id);
+                                              &fw, &hdm_decoder_id, &rid);
+
 
         if (!found) {
-            printf("Could not find the extent detail for DPA 0x%" PRIx64
+            qemu_log("Could not find the extent detail for DPA 0x%" PRIx64
                    " LEN 0x%" PRIx64 "\n", dpa, len);
-            printf("This should never happen!\n");
+            qemu_log("This should never happen!\n");
             return CXL_MBOX_INVALID_PA;
         }
 
         // cxl_insert_extent_to_extent_list(extent_list, dpa, len, NULL, 0);
         cxl_insert_extent_to_extent_list_tmp(extent_list, dpa, len,
-                                             tag, 0, host_dc, host_dc_as, 
-                                             hdm_decoder_id, fw);
+                                             tag, 0, host_dc, host_dc_as,
+                                             hdm_decoder_id, fw, rid);
+
+        if (!host_dc) {
+            qemu_log("No host memory backend associated with this extent\n");
+            return CXL_MBOX_INVALID_PA;
+        }
+
+        if (!host_memory_backend_is_mapped(host_dc)) {
+            mr = host_memory_backend_get_memory(host_dc);
+
+            if (!mr) {
+                qemu_log("Could not get memory region from host memory backend\n");
+                return CXL_MBOX_INVALID_PA;
+            }
+
+            memory_region_set_nonvolatile(mr, false);
+            memory_region_set_enabled(mr, true);
+            host_memory_backend_set_mapped(host_dc, true);
+        } else {
+            mr = host_memory_backend_get_memory(host_dc);
+        }
+
+        if (ct3d->direct_mapping_supported) {
+            int mr_idx = ct3d->dc.cur_hdm_decoder_idx;
+            MemoryRegion *dr_dc_mr = &ct3d->dc.dc_direct_mr[mr_idx];
+            direct_mapping_name =
+                g_strdup_printf("cxl-direct-mapping-%d", mr_idx);
+            int offset = dpa - ct3d->dc.regions[rid].base;
+            memory_region_init_alias(dr_dc_mr,
+                                     OBJECT(ct3d), direct_mapping_name, mr,
+                                     offset, ct3d->dc.dc_decoder_window.size);
+            memory_region_add_subregion(
+                &fw->mr, ct3d->dc.dc_decoder_window.base - fw->base,
+                dr_dc_mr);
+
+            ct3d->dc.cur_hdm_decoder_idx = (ct3d->dc.cur_hdm_decoder_idx + 1) %
+                4; // for now assuming 4 extents
+            g_free(direct_mapping_name);
+        }
+
         ct3d->dc.total_extent_count += 1;
         ct3d->dc.nr_extents_accepted += 1;
         ct3_set_region_block_backed(ct3d, dpa, len);
@@ -3202,11 +3250,12 @@ static uint32_t copy_extent_list(CXLDCExtentList *dst,
         // cxl_insert_extent_to_extent_list(dst, ent->start_dpa, ent->len,
         //                                  ent->tag, ent->shared_seq);
 
-        cxl_insert_extent_to_extent_list_tmp(dst, 
+        cxl_insert_extent_to_extent_list_tmp(dst,
                                              ent->start_dpa, ent->len,
-                                             ent->tag, 0, 
-                                             ent->host_dc, ent->host_dc_as, 
-                                             ent->hdm_decoder_idx, ent->fw);
+                                             ent->tag, 0,
+                                             ent->host_dc, ent->host_dc_as,
+                                             ent->hdm_decoder_idx, ent->fw,
+                                             ent->rid);
         cnt++;
     }
     return cnt;
@@ -3276,20 +3325,19 @@ static CXLRetCode cxl_dc_extent_release_dry_run_tmp(CXLType3Dev *ct3d,
                                                          ent->host_dc,
                                                          ent->host_dc_as,
                                                          ent->hdm_decoder_idx,
-                                                         ent->fw);
+                                                         ent->fw,
+                                                         ent->rid);
 
                     cxl_remove_extent_from_extent_list(updated_list, ent);
                     cnt_delta--;
 
                     if (len1) {
-                        printf("should not see anything! hole before\n");
                         cxl_insert_extent_to_extent_list(updated_list,
                                                          ent_start_dpa,
                                                          len1, NULL, 0);
                         cnt_delta++;
                     }
                     if (len2) {
-                        printf("should not see anything! hole after\n");
                         cxl_insert_extent_to_extent_list(updated_list,
                                                          dpa + len,
                                                          len2, NULL, 0);
@@ -3452,8 +3500,7 @@ static CXLRetCode cmd_dcd_release_dyn_cap(const struct cxl_cmd *cmd,
 
     // Tearing down memory
     QTAILQ_FOREACH_SAFE(ent, &updated_removed_list, node, ent_next) {
-        tear_down_memory_alias(ct3d, ent->fw, ent->hdm_decoder_idx);
-        printf("remove some memory and making sure the backend is gone as well\n");
+        cxl_tear_down_memory_alias(ct3d, ent->fw, ent->hdm_decoder_idx);
         cxl_remove_extent_from_extent_list(&updated_removed_list, ent);
     }
 

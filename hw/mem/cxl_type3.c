@@ -743,8 +743,9 @@ static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
         return false;
     }
 
-    // this if statement must be changed! because this call can be made multiple times, and that's OK if this is already mapped.
-    // We can later unmap it when there is not capacity left. In terms of maybe extents.
+    // this if statement must be changed! because this call can be made
+    // multiple times, and that's OK if this is already mapped.  We can later
+    // unmap it when there is not capacity left. In terms of maybe extents.
     if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
         // error_setg(
         //     errp, "memory backend %s can't be used multiple times.",
@@ -774,12 +775,12 @@ static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
     // if (i == 0) {
     //     address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
     //     i++;
-    // } 
-    
+    // }
+
     // else {
     //     address_space_init(&ct3d->dc.host_dc_as2, dc_mr, dc_name);
     // }
-    
+
     cfmws_update_non_interleaved(true);
     g_free(dc_name);
     return true;
@@ -1311,8 +1312,6 @@ static const Property ct3_props[] = {
     DEFINE_PROP_UINT8("num-dc-regions", CXLType3Dev, dc.num_regions, 0),
     DEFINE_PROP_SIZE("dc-regions-total-size", CXLType3Dev,
                      dc.total_capacity_cmd, 0),
-    // DEFINE_PROP_LINK("volatile-dc-memdev", CXLType3Dev, dc.host_dc,
-    //                  TYPE_MEMORY_BACKEND, HostMemoryBackend *),
     DEFINE_PROP_PCIE_LINK_SPEED("x-speed", CXLType3Dev, speed,
                                 PCIE_LINK_SPEED_32),
     DEFINE_PROP_PCIE_LINK_WIDTH("x-width", CXLType3Dev, width,
@@ -2017,31 +2016,31 @@ static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
             return;
     }
 
+    QemuUUID uuid_req;
+    qemu_uuid_parse(tag, &uuid_req);
+
     list = &dcd->dc.extents;
     size_t cap = 8, n = 0;
     extents = g_new0(CXLDCExtentRaw, cap);
     QTAILQ_FOREACH (ent, list, node) {
-        // if (tag && memcmp(ent->tag, tag, strlen(tag) + 1) == 0) {
-        /*
-         * assuming tag is just matches. By invocation of this function,
-         * you will remove all of the extents for a device.  But it must
-         * remove only the extents that match the tag.
-         */
-        if (true) {
-            if (n == cap) {
-                cap = cap < 8 ? 8 : cap * 2;
-                extents = g_renew(CXLDCExtentRaw, extents, cap);
-            }
+        QemuUUID uuid_ext;
+        memcpy(&uuid_ext.data, ent->tag, sizeof(ent->tag));
+        if (qemu_uuid_is_equal(&uuid_req, &uuid_ext) == false)
+            continue;
 
-            extents[n++] = (CXLDCExtentRaw){ .start_dpa = ent->start_dpa,
-                                             .len = ent->len,
-                                             .shared_seq = 0 };
-        	memset(extents[n - 1].tag, 0, 0x10);
-
-            printf("Found extent with tag %s dpa 0x%" PRIx64
-                   " len 0x%" PRIx64 " %p \n",
-                   ent->tag, ent->start_dpa, ent->len, (void *)ent->fw);
+        if (n == cap) {
+            cap = cap < 8 ? 8 : cap * 2;
+            extents = g_renew(CXLDCExtentRaw, extents, cap);
         }
+
+        extents[n++] = (CXLDCExtentRaw){ .start_dpa = ent->start_dpa,
+                                         .len = ent->len,
+                                         .shared_seq = 0 };
+        memset(extents[n - 1].tag, 0, 0x10);
+
+        printf("Found extent with tag %s dpa 0x%" PRIx64
+               " len 0x%" PRIx64 " %p \n",
+               ent->tag, ent->start_dpa, ent->len, (void *)ent->fw);
     }
 
     // shrink to fit! Just in case;
@@ -2061,8 +2060,8 @@ ExtentStatus *qmp_cxl_release_dynamic_capacity_status(const char *path,
     CXLType3Dev *dcd;
     CXLDCExtentList *list = NULL;
     CXLDCExtent *ent;
+    QemuUUID uuid_req;
     ExtentStatus *res = g_new0(ExtentStatus, 1);
-
 
     obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
     if (!obj) {
@@ -2076,38 +2075,23 @@ ExtentStatus *qmp_cxl_release_dynamic_capacity_status(const char *path,
         return NULL;
     }
 
-    // does this suppose to check if there is even an region id with that ID at
-    // all?
     if (rid >= dcd->dc.num_regions) {
-        error_setg(errp, "region id is too large");
+        error_setg(errp, "Region id is too large");
         return NULL;
     }
 
     if (!tag) {
-        error_setg(errp, "tag must be valid");
+        error_setg(errp, "Tag must be valid");
         return NULL;
     }
 
     list = &dcd->dc.extents;
-    size_t cap = 8, n = 0;
-    printf("cap %lu, %lu\n", cap, n);
-    // int hdm_decoder_id;
-    // struct CXLFixedWindow *fw;
-    // HostMemoryBackend *hm;
-    //
-    // If this is found, then we grab the information and do the rest of the stuff
-    // but we want to make sure that this is properly removed, and if we know that it is removed,
-    // then we cannot really do anything, because we have already lost the object!
+    qemu_uuid_parse(tag, &uuid_req);
 
     QTAILQ_FOREACH (ent, list, node) {
-        // if (tag && memcmp(ent->tag, tag, strlen(tag) + 1) == 0) {
-        if (true) {
-            printf("Found extent with tag %s dpa 0x%" PRIx64
-                   " len 0x%" PRIx64 "\n",
-                   ent->tag, ent->start_dpa, ent->len);
-            // hdm_decoder_id = ent->hdm_decoder_idx;
-            // fw = ent->fw;
-            // hm = ent->host_dc;
+        QemuUUID uuid_ext;
+        memcpy(&uuid_ext.data, ent->tag, sizeof(ent->tag));
+        if (qemu_uuid_is_equal(&uuid_req, &uuid_ext) == true) {
             res->status = g_strdup("Not Released");
             res->message = g_strdup_printf("Found extent with tag %s dpa 0x%"
                                            PRIx64 " len 0x%" PRIx64 "\n",
@@ -2123,19 +2107,30 @@ ExtentStatus *qmp_cxl_release_dynamic_capacity_status(const char *path,
     return res;
 }
 
-void tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
+void cxl_tear_down_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
                             uint32_t hdm_id)
 {
-    MemoryRegion *mr = &dcd->direct_mr[hdm_id];
+    MemoryRegion *mr; 
+
+    if (dcd->dc.total_capacity_cmd > 0) {
+        /*
+         * Dynamic capacity alias
+         */
+        mr = &dcd->dc.dc_direct_mr[hdm_id];
+    } else {
+        /*
+         * Non DC alias
+         */
+        mr = &dcd->direct_mr[hdm_id];
+    }
 
     if (!fw) {
-        printf("We are expending a value Fix Memory Window but unfortunately it is NULL!\n");
+        qemu_log("Cannot remove memory region alias without a valid fixed window\n");
         return;
     }
 
     if (mr) {
         memory_region_del_subregion(&fw->mr, mr);
-        // memory_region_del_subregion(&dcd->dc.dc_mr_root, mr);
     }
 
     return;
@@ -2157,6 +2152,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
     g_autofree CXLDCExtentRaw *extents = NULL;
     uint64_t dpa, offset, len = 0, block_size;
     g_autofree unsigned long *blk_bitmap = NULL;
+    QemuUUID uuid;
     int i;
 
     obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
@@ -2239,7 +2235,6 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         dcd->dc.total_offset = offset;
     }
 
-    // here we still do not know what the offsets are.
     if (type == DC_EVENT_ADD_CAPACITY) {
         MemoryRegion *host_dc_mr;
         uint64_t size;
@@ -2275,26 +2270,24 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         offset = list->value->offset;
         len = list->value->len;
         dpa = dcd->dc.regions[rid].base + offset;
+        qemu_uuid_parse(tag, &uuid);
 
         extents[i].start_dpa = dpa;
         extents[i].len = len;
-        memset(extents[i].tag, 0, 0x10);
-        // memcpy(extents[i].tag, tag, 0x10); // it is just two bytes!
+        memcpy(extents[i].tag, uuid.data, 0x10);
         extents[i].shared_seq = 0;
 
         if (type == DC_EVENT_ADD_CAPACITY) {
-            printf("ADDED %p\n", (void *)dcd->dc.cur_fw);
-
             group = cxl_insert_extent_to_extent_group_tmp(group,
-                                                      extents[i].start_dpa,
-                                                      extents[i].len,
-                                                      extents[i].tag,
-                                                      extents[i].shared_seq,
-                                                      dcd->dc.host_dc,
-                                                      dcd->dc.host_dc_as,
-                                                      dcd->dc.cur_hdm_decoder_idx,
-                                                      dcd->dc.cur_fw);
-            // dcd->dc.total_offset += offset + len; // assuming no holes;
+                                                    extents[i].start_dpa,
+                                                    extents[i].len,
+                                                    extents[i].tag,
+                                                    extents[i].shared_seq,
+                                                    dcd->dc.host_dc,
+                                                    dcd->dc.host_dc_as,
+                                                    dcd->dc.cur_hdm_decoder_idx,
+                                                    dcd->dc.cur_fw,
+                                                    rid);
         }
 
         list = list->next;
@@ -2304,8 +2297,6 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         cxl_extent_group_list_insert_tail(&dcd->dc.extents_pending, group);
         dcd->dc.total_extent_count += num_extents;
     }
-
-    printf("Total %d extents processed\n", dcd->dc.total_extent_count);
 
     cxl_create_dc_event_records_for_extents(dcd, type, extents, num_extents);
 }
