@@ -1965,6 +1965,32 @@ bool cxl_extent_groups_overlaps_dpa_range(CXLDCExtentGroupList *list,
     return false;
 }
 
+static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
+                                                  const char *tag, Error **errp)
+{
+    MemoryRegion *dc_mr;
+
+    ct3d->dc.host_dc = memory_backend_tagged_find_by_tag(tag, errp);
+    if (!ct3d->dc.host_dc) {
+        error_setg(errp, "dynamic capacity must have a backing device");
+        return false;
+    }
+
+    dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
+    if (!dc_mr) {
+        error_setg(errp, "test dynamic capacity must have a backing device");
+        return false;
+    }
+
+    if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
+        qemu_log("Warning: memory backend %s is already mapped. Reusing it.\n",
+               object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
+        return true;
+    }
+
+    return true;
+}
+
 /*
  * The main function to process dynamic capacity event with extent list.
  * Currently DC extents add/release requests are processed.
@@ -1979,8 +2005,9 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
     CxlDynamicCapacityExtentList *list;
     CXLDCExtentGroup *group = NULL;
     g_autofree CXLDCExtentRaw *extents = NULL;
-    uint64_t dpa, offset, len, block_size;
+    uint64_t dpa, offset, block_size, len = 0;
     g_autofree unsigned long *blk_bitmap = NULL;
+	QemuUUID uuid;
     int i;
 
     obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
@@ -2009,6 +2036,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         offset = list->value->offset;
         len = list->value->len;
         dpa = offset + dcd->dc.regions[rid].base;
+        qemu_uuid_parse(tag, &uuid);
 
         if (len == 0) {
             error_setg(errp, "extent with 0 length is not allowed");
@@ -2062,6 +2090,32 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         num_extents++;
     }
 
+	if (type == DC_EVENT_ADD_CAPACITY && dcd->dc.total_capacity_cmd) {
+	    MemoryRegion *host_dc_mr;
+	    uint64_t size;
+
+	    if (num_extents > 1) {
+	        error_setg(errp,
+	                   "Only single extent add is supported currently");
+	        return;
+	    }
+
+	    if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
+	        return;
+	    }
+
+	    host_dc_mr = host_memory_backend_get_memory(dcd->dc.host_dc);
+	    size = memory_region_size(host_dc_mr);
+
+	    if (size != len) {
+	        error_setg(errp,
+	                   "Host memory backend size 0x%" PRIx64
+	                   " does not match extent length 0x%" PRIx64,
+	                   size, len);
+	        return;
+	    }
+	}
+
     /* Create extent list for event being passed to host */
     i = 0;
     list = records;
@@ -2073,7 +2127,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
 
         extents[i].start_dpa = dpa;
         extents[i].len = len;
-        memset(extents[i].tag, 0, 0x10);
+        memcpy(extents[i].tag, &uuid.data, 0x10);
         extents[i].shared_seq = 0;
         if (type == DC_EVENT_ADD_CAPACITY) {
             group = cxl_insert_extent_to_extent_group(group,
