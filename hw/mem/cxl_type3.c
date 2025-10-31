@@ -30,6 +30,7 @@
 #include "system/numa.h"
 #include "hw/cxl/cxl.h"
 #include "hw/pci/msix.h"
+#include "hw/mem/tagged_mem.h"
 
 /* type3 device private */
 enum CXL_T3_MSIX_VECTOR {
@@ -1969,7 +1970,7 @@ bool cxl_extent_groups_overlaps_dpa_range(CXLDCExtentGroupList *list,
  * Currently DC extents add/release requests are processed.
  */
 static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
-        uint16_t hid, CXLDCEventType type, uint8_t rid,
+        uint16_t hid, CXLDCEventType type, uint8_t rid, const char *tag,
         CxlDynamicCapacityExtentList *records, Error **errp)
 {
     Object *obj;
@@ -2103,7 +2104,8 @@ void qmp_cxl_add_dynamic_capacity(const char *path, uint16_t host_id,
     case CXL_EXTENT_SELECTION_POLICY_PRESCRIPTIVE:
         qmp_cxl_process_dynamic_capacity_prescriptive(path, host_id,
                                                       DC_EVENT_ADD_CAPACITY,
-                                                      region, extents, errp);
+                                                      region, tag, extents,
+                                                      errp);
         return;
     default:
         error_setg(errp, "Selection policy not supported");
@@ -2134,7 +2136,8 @@ void qmp_cxl_release_dynamic_capacity(const char *path, uint16_t host_id,
     switch (removal_policy) {
     case CXL_EXTENT_REMOVAL_POLICY_PRESCRIPTIVE:
         qmp_cxl_process_dynamic_capacity_prescriptive(path, host_id, type,
-                                                      region, extents, errp);
+                                                      region, tag, extents,
+                                                      errp);
         return;
     default:
         error_setg(errp, "Removal policy not supported");
