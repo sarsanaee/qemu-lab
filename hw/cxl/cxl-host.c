@@ -365,6 +365,8 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
         return 0;
     }
 
+    ct3d->dc.fw = fw;
+
     if (state->commit) {
         MemoryRegion *mr = NULL;
         uint64_t vmr_size = 0, pmr_size = 0, dc_mr_size = 0;
