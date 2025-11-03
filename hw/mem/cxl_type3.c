@@ -2139,7 +2139,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
                                                           extents[i].len,
                                                           extents[i].tag,
                                                           extents[i].shared_seq,
-                                                          rid);
+                                                          rid,
+                                                          offset);
             } else {
                 group = cxl_insert_extent_to_extent_group(group,
                                                           dcd->dc.host_dc,
@@ -2148,7 +2149,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
                                                           extents[i].len,
                                                           extents[i].tag,
                                                           extents[i].shared_seq,
-                                                          rid);
+                                                          rid,
+                                                          offset);
             }
         }
 
@@ -2258,7 +2260,7 @@ ExtentStatus *qmp_cxl_release_dynamic_capacity_status(const char *path,
     QTAILQ_FOREACH(ent, list, node) {
         QemuUUID uuid_ext;
         memcpy(&uuid_ext.data, ent->tag, sizeof(ent->tag));
-        if (qemu_uuid_is_equal(&uuid_req, &uuid_ext) == true) {
+        if (qemu_uuid_is_equal(&uuid_req, &uuid_ext)) {
             res->status = g_strdup("Not Released");
             res->message =
                 g_strdup_printf("Found extent with tag %s dpa 0x%" PRIx64
@@ -2267,7 +2269,6 @@ ExtentStatus *qmp_cxl_release_dynamic_capacity_status(const char *path,
             return res;
         }
     }
-
 
     res->status = g_strdup("Released");
     res->message = g_strdup_printf("Tag %s released or not found\n", tag);
