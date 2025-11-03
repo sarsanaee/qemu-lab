@@ -3260,14 +3260,15 @@ static CXLRetCode cxl_dc_extent_release_dry_run(CXLType3Dev *ct3d,
                     }
                     len_done = ent_len - len1 - len2;
 
-                    cxl_remove_extent_from_extent_list(updated_list, ent);
-                    cnt_delta--;
                     if (updated_removed_list) {
                         cxl_insert_extent_to_extent_list(
                             updated_removed_list, ent->hm, ent->fw,
                             ent->start_dpa, ent->len, ent->tag, ent->shared_seq,
                             ent->rid, ent->offset, ent->direct_window_idx);
                     }
+
+                    cxl_remove_extent_from_extent_list(updated_list, ent);
+                    cnt_delta--;
 
                     if (len1) {
                         cxl_insert_extent_to_extent_list(
@@ -3359,7 +3360,6 @@ static CXLRetCode cmd_dcd_release_dyn_cap(const struct cxl_cmd *cmd,
             cxl_remove_memory_alias(ct3d, ent->fw, ent->direct_window_idx);
             cxl_remove_extent_from_extent_list(&updated_removed_list, ent);
         }
-    }
 
     /*
      * If the dry run release passes, the returned updated_list will
