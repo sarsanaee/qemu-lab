@@ -362,10 +362,14 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
     fw = CXL_FMW(obj);
 
     if (!cfmws_is_not_interleaved(fw, state->decoder_base)) {
+        ct3d->direct_mr_enabled = false;
         return 0;
     }
+    ct3d->direct_mr_enabled = true;
 
     ct3d->dc.fw = fw;
+    ct3d->dc.dc_decoder_window.base = state->decoder_base;
+    ct3d->dc.dc_decoder_window.size = state->decoder_size;
 
     if (state->commit) {
         MemoryRegion *mr = NULL;
