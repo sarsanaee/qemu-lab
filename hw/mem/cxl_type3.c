@@ -2139,7 +2139,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
                                                           extents[i].tag,
                                                           extents[i].shared_seq,
                                                           rid,
-                                                          offset);
+                                                          offset,
+                                                          0);
             } else {
                 group = cxl_insert_extent_to_extent_group(group,
                                                           dcd->dc.host_dc,
@@ -2149,7 +2150,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
                                                           extents[i].tag,
                                                           extents[i].shared_seq,
                                                           rid,
-                                                          offset);
+                                                          offset,
+                                                          0);
             }
         }
 
@@ -2272,6 +2274,29 @@ ExtentStatus *qmp_cxl_release_dynamic_capacity_status(const char *path,
     res->status = g_strdup("Released");
     res->message = g_strdup_printf("Tag %s released or not found\n", tag);
     return res;
+}
+
+void cxl_remove_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
+                             uint32_t hdm_id)
+{
+    MemoryRegion *mr;
+
+    if (dcd->dc.total_capacity_cmd > 0) {
+        mr = &dcd->dc.dc_direct_mr[hdm_id];
+    } else {
+        qemu_log("No dynamic capacity command support, "
+                 "cannot remove memory region alias\n");
+        return;
+    }
+
+    if (!fw) {
+        qemu_log(
+            "Cannot remove memory region alias without a valid fixed window\n");
+        return;
+    }
+
+    memory_region_del_subregion(&fw->mr, mr);
+    return;
 }
 
 static void ct3_class_init(ObjectClass *oc, const void *data)
