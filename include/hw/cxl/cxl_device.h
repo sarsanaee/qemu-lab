@@ -525,6 +525,7 @@ typedef struct CXLDCExtent {
     uint8_t rsvd[0x6];
     int rid;
     uint64_t offset;
+    int direct_window_idx;
 
     QTAILQ_ENTRY(CXLDCExtent) node;
 } CXLDCExtent;
@@ -739,7 +740,8 @@ void cxl_insert_extent_to_extent_list(CXLDCExtentList *list,
                                       uint8_t *tag,
                                       uint16_t shared_seq,
                                       int rid,
-                                      uint64_t offset);
+                                      uint64_t offset,
+                                      uint32_t direct_window_idx);
 bool test_any_bits_set(const unsigned long *addr, unsigned long nr,
                        unsigned long size);
 bool cxl_extents_contains_dpa_range(CXLDCExtentList *list,
@@ -752,7 +754,8 @@ CXLDCExtentGroup *cxl_insert_extent_to_extent_group(CXLDCExtentGroup *group,
                                                     uint8_t *tag,
                                                     uint16_t shared_seq,
                                                     int rid,
-                                                    uint64_t offset);
+                                                    uint64_t offset,
+                                                    uint32_t direct_window_idx);
 void cxl_extent_group_list_insert_tail(CXLDCExtentGroupList *list,
                                        CXLDCExtentGroup *group);
 uint32_t cxl_extent_group_list_delete_front(CXLDCExtentGroupList *list);
@@ -773,4 +776,6 @@ bool cxl_extents_overlaps_dpa_range(CXLDCExtentList *list,
                                     uint64_t dpa, uint64_t len);
 bool cxl_extent_groups_overlaps_dpa_range(CXLDCExtentGroupList *list,
                                           uint64_t dpa, uint64_t len);
+void cxl_remove_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
+                             uint32_t hdm_id);
 #endif
