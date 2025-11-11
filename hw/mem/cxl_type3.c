@@ -2341,7 +2341,14 @@ void cxl_remove_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
 {
     MemoryRegion *mr;
 
-    mr = &dcd->dc.dc_direct_mr[direct_window_idx];
+    if (dcd->dc.total_capacity_cmd > 0) {
+        mr = &dcd->dc.dc_direct_mr[direct_window_idx];
+    } else {
+        qemu_log("No dynamic capacity command support, "
+                 "cannot remove memory region alias\n");
+        return;
+    }
+
     memory_region_del_subregion(&fw->mr, mr);
 }
 
