@@ -2213,12 +2213,6 @@ static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
         return;
     }
 
-    if (!dcd->dc.host_dc) {
-            error_setg(errp, "No backend memory yet for dynamic capacity "
-                             "region %d", rid);
-            return;
-    }
-
     QemuUUID uuid_req;
     qemu_uuid_parse(tag, &uuid_req);
 
