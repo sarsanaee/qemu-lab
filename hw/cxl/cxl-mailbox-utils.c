@@ -3210,7 +3210,9 @@ static uint32_t copy_extent_list(CXLDCExtentList *dst,
     }
 
     QTAILQ_FOREACH(ent, src, node) {
-        cxl_insert_extent_to_extent_list(dst, ent->hm, ent->fw, ent->start_dpa, ent->len, ent->tag, ent->shared_seq, ent->rid, ent->offset, ent->direct_window_idx);
+        cxl_insert_extent_to_extent_list(
+            dst, ent->hm, ent->fw, ent->start_dpa, ent->len, ent->tag,
+            ent->shared_seq, ent->rid, ent->offset, ent->direct_window_idx);
         cnt++;
     }
     return cnt;
@@ -3271,18 +3273,26 @@ static CXLRetCode cxl_dc_extent_release_dry_run(CXLType3Dev *ct3d,
                     }
 
                     if (updated_removed_list) {
-                        cxl_insert_extent_to_extent_list(updated_removed_list, ent->hm, ent->fw, ent->start_dpa, ent->len, ent->tag, ent->shared_seq, ent->rid, ent->offset, ent->direct_window_idx);
+                        cxl_insert_extent_to_extent_list(
+                            updated_removed_list, ent->hm, ent->fw,
+                            ent->start_dpa, ent->len, ent->tag, ent->shared_seq,
+                            ent->rid, ent->offset, ent->direct_window_idx);
                     }
 
                     cxl_remove_extent_from_extent_list(updated_list, ent);
                     cnt_delta--;
 
                     if (len1) {
-                        cxl_insert_extent_to_extent_list(updated_list, NULL, NULL, ent_start_dpa, len1, ent->tag, 0, ent->rid, ent->offset, ent->direct_window_idx);
+                        cxl_insert_extent_to_extent_list(
+                            updated_list, NULL, NULL, ent_start_dpa, len1,
+                            ent->tag, 0, ent->rid, ent->offset,
+                            ent->direct_window_idx);
                         cnt_delta++;
                     }
                     if (len2) {
-                        cxl_insert_extent_to_extent_list(updated_list, NULL, NULL, dpa + len, len2, ent->tag, 0, ent->rid, ent->offset, ent->direct_window_idx);
+                        cxl_insert_extent_to_extent_list(
+                            updated_list, NULL, NULL, dpa + len, len2, ent->tag,
+                            0, ent->rid, ent->offset, ent->direct_window_idx);
                         cnt_delta++;
                     }
 
