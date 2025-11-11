@@ -2337,26 +2337,12 @@ ExtentStatus *qmp_cxl_release_dynamic_capacity_status(const char *path,
 }
 
 void cxl_remove_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
-                             uint32_t hdm_id)
+                             uint32_t direct_window_idx)
 {
     MemoryRegion *mr;
 
-    if (dcd->dc.total_capacity_cmd > 0) {
-        mr = &dcd->dc.dc_direct_mr[hdm_id];
-    } else {
-        qemu_log("No dynamic capacity command support, "
-                 "cannot remove memory region alias\n");
-        return;
-    }
-
-    if (!fw) {
-        qemu_log(
-            "Cannot remove memory region alias without a valid fixed window\n");
-        return;
-    }
-
+    mr = &dcd->dc.dc_direct_mr[direct_window_idx];
     memory_region_del_subregion(&fw->mr, mr);
-    return;
 }
 
 static void ct3_class_init(ObjectClass *oc, const void *data)
