@@ -341,6 +341,7 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
         return 0;
     }
 
+   state->ct3d->dc.fw = fw;
    if (state->commit) {
         cxl_fmws_direct_passthrough_setup(state, fw);
     } else {
