@@ -687,6 +687,19 @@
             '*x-use-canonical-path-for-ramblock-id': 'bool' } }
 
 ##
+# @MemoryBackendTaggedProperties:
+#
+# Properties for objects of classes derived from memory-backend.
+#
+# @tag: Memory tag
+#
+# Since: 11.0
+##
+{ 'struct': 'MemoryBackendTaggedProperties',
+  'base': 'MemoryBackendProperties',
+  'data': { '*tag': 'str' } }
+
+##
 # @MemoryBackendFileProperties:
 #
 # Properties for memory-backend-file objects.
@@ -1215,6 +1228,7 @@
     { 'name': 'memory-backend-memfd',
       'if': 'CONFIG_LINUX' },
     'memory-backend-ram',
+    'memory-backend-tagged',
     { 'name': 'memory-backend-shm',
       'if': 'CONFIG_POSIX' },
     'pef-guest',
@@ -1293,6 +1307,7 @@
       'memory-backend-memfd':       { 'type': 'MemoryBackendMemfdProperties',
                                       'if': 'CONFIG_LINUX' },
       'memory-backend-ram':         'MemoryBackendProperties',
+      'memory-backend-tagged':      'MemoryBackendTaggedProperties',
       'memory-backend-shm':         { 'type': 'MemoryBackendShmProperties',
                                       'if': 'CONFIG_POSIX' },
       'pr-manager-helper':          { 'type': 'PrManagerHelperProperties',
