@@ -361,6 +361,7 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
     }
 
     cxl_fmws_direct_passthrough_setup(state, fw);
+    state->ct3d->dc.fw = fw;
 
     return 0;
 }
