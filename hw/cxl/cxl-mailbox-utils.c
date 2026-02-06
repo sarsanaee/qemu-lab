@@ -3387,7 +3387,8 @@ void cxl_insert_extent_to_extent_list(CXLDCExtentList *list,
                                              uint64_t len,
                                              uint8_t *tag,
                                              uint16_t shared_seq,
-                                             int rid)
+                                             int rid,
+                                             uint64_t offset)
 {
     CXLDCExtent *extent;
 
@@ -3396,6 +3397,7 @@ void cxl_insert_extent_to_extent_list(CXLDCExtentList *list,
     extent->fw = fw;
     extent->start_dpa = dpa;
     extent->len = len;
+    extent->offset = offset;
     if (tag) {
         memcpy(extent->tag, tag, 0x10);
     }
@@ -3424,14 +3426,15 @@ CXLDCExtentGroup *cxl_insert_extent_to_extent_group(CXLDCExtentGroup *group,
                                                     uint64_t len,
                                                     uint8_t *tag,
                                                     uint16_t shared_seq,
-                                                    int rid)
+                                                    int rid,
+                                                    uint64_t offset)
 {
     if (!group) {
         group = g_new0(CXLDCExtentGroup, 1);
         QTAILQ_INIT(&group->list);
     }
     cxl_insert_extent_to_extent_list(&group->list, host_mem, fw, dpa, len,
-                                     tag, shared_seq, rid);
+                                     tag, shared_seq, rid, offset);
     return group;
 }
 
@@ -3530,7 +3533,8 @@ static bool cxl_extent_find_extent_detail(CXLDCExtentGroupList *list,
                                           uint8_t *tag,
                                           HostMemoryBackend **hmb,
                                           struct CXLFixedWindow **fw,
-                                          int *rid)
+                                          int *rid,
+                                          uint64_t *offset)
 {
     CXLDCExtent *ent, *ent_next;
     CXLDCExtentGroup *group = QTAILQ_FIRST(list);
@@ -3541,6 +3545,7 @@ static bool cxl_extent_find_extent_detail(CXLDCExtentGroupList *list,
             *hmb = ent->hm;
             memcpy(tag, ent->tag, 0x10);
             *rid = ent->rid;
+            *offset = ent->offset;
             return true;
         }
     }
@@ -3602,7 +3607,7 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
     HostMemoryBackend *hmb_dc;
     uint8_t tag[0x10];
     uint32_t i, num;
-    uint64_t dpa, len;
+    uint64_t dpa, len, offset;
     int rid;
     CXLRetCode ret;
 
@@ -3646,7 +3651,8 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
 
             found = cxl_extent_find_extent_detail(&ct3d->dc.extents_pending,
                                                   dpa, len, tag,
-                                                  &hmb_dc, &fw, &rid);
+                                                  &hmb_dc, &fw, &rid,
+                                                  &offset);
 
             /* Host accepted an extent where device lacks details */
             if (!found) {
@@ -3672,11 +3678,32 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
             memory_region_set_enabled(mr, true);
             host_memory_backend_set_mapped(hmb_dc, true);
 
+            /* Optional direct alias mapping into fixed memory window */
+            if (ct3d->direct_mr_enabled) {
+                int mr_idx = ct3d->dc.cur_direct_region_idx;
+                g_autofree char *direct_mapping_name =
+                    g_strdup_printf("cxl-direct-mapping-%d", mr_idx);
+                int region_offset = dpa - ct3d->dc.regions[rid].base;
+                MemoryRegion *dr_dc_mr = &ct3d->dc.dc_direct_mr[mr_idx];
+
+                memory_region_init_alias(dr_dc_mr, OBJECT(ct3d),
+                                         direct_mapping_name, mr,
+                                         region_offset,
+                                         ct3d->dc.dc_decoder_window.size);
+                memory_region_add_subregion(&fw->mr,
+                    ct3d->dc.dc_decoder_window.base - fw->base + offset,
+                    dr_dc_mr);
+
+                /* Assume 4 direct regions for now */
+                ct3d->dc.cur_direct_region_idx =
+                    (ct3d->dc.cur_direct_region_idx + 1) % 4;
+            }
+
             cxl_insert_extent_to_extent_list(extent_list, hmb_dc, fw, dpa, len,
-                                             NULL, 0, rid);
+                                             tag, 0, rid, offset);
         } else {
             cxl_insert_extent_to_extent_list(extent_list, NULL, NULL, dpa, len,
-                                             NULL, 0, -1);
+                                             NULL, 0, -1, (uint64_t)-1);
         }
         ct3d->dc.total_extent_count += 1;
         ct3d->dc.nr_extents_accepted += 1;
@@ -3705,9 +3732,9 @@ static uint32_t copy_extent_list(CXLDCExtentList *dst,
 
     QTAILQ_FOREACH(ent, src, node) {
         cxl_insert_extent_to_extent_list(dst, ent->hm, ent->fw,
-                                         ent->start_dpa, ent->len,
-                                         ent->tag, ent->shared_seq,
-                                         ent->rid);
+                         ent->start_dpa, ent->len,
+                         ent->tag, ent->shared_seq,
+                         ent->rid, ent->offset);
         cnt++;
     }
     return cnt;
@@ -3763,15 +3790,15 @@ static CXLRetCode cxl_dc_extent_release_dry_run(CXLType3Dev *ct3d,
                     if (len1) {
                         cxl_insert_extent_to_extent_list(updated_list, NULL,
                                                          NULL, ent_start_dpa,
-                                                         len1, NULL, 0,
-                                                         ent->rid);
+                                                         len1, ent->tag, 0,
+                                                         ent->rid, ent->offset);
                         cnt_delta++;
                     }
                     if (len2) {
                         cxl_insert_extent_to_extent_list(updated_list, NULL,
                                                          NULL, dpa + len,
-                                                         len2, NULL, 0,
-                                                         ent->rid);
+                                                         len2, ent->tag, 0,
+                                                         ent->rid, ent->offset);
                         cnt_delta++;
                     }
 
@@ -4247,7 +4274,8 @@ static CXLRetCode cmd_fm_initiate_dc_add(const struct cxl_cmd *cmd,
                 group = cxl_insert_extent_to_extent_group(group, NULL, NULL,
                                                           ext->start_dpa,
                                                           ext->len, ext->tag,
-                                                          ext->shared_seq, 0);
+                                                          ext->shared_seq, 0,
+                                                          (uint64_t)-1);
             }
 
             cxl_extent_group_list_insert_tail(&ct3d->dc.extents_pending, group);

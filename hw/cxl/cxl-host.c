@@ -338,10 +338,14 @@ static int cxl_fmws_direct_passthrough(Object *obj, void *opaque)
 
     /* Verify not interleaved */
     if (!cxl_cfmws_find_device(fw, state->decoder_base, false)) {
+        state->ct3d->direct_mr_enabled = false;
         return 0;
     }
+    state->ct3d->direct_mr_enabled = true;
 
-   state->ct3d->dc.fw = fw;
+    state->ct3d->dc.fw = fw;
+    state->ct3d->dc.dc_decoder_window.base = state->decoder_base;
+    state->ct3d->dc.dc_decoder_window.size = state->decoder_size;
    if (state->commit) {
         cxl_fmws_direct_passthrough_setup(state, fw);
     } else {
