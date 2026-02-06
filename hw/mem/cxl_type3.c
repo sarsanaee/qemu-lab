@@ -2490,6 +2490,61 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
     cxl_create_dc_event_records_for_extents(dcd, type, extents, num_extents);
 }
 
+static void qmp_cxl_process_dynamic_capacity_tag_based(const char *path,
+        uint16_t hid, CXLDCEventType type, uint8_t rid, const char *tag,
+        CxlDynamicCapacityExtentList *records, Error **errp)
+{
+    Object *obj;
+    CXLType3Dev *dcd;
+    CXLDCExtentList *list = NULL;
+    CXLDCExtent *ent;
+    g_autofree CXLDCExtentRaw *extents = NULL;
+
+    obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
+    if (!obj) {
+        error_setg(errp, "Unable to resolve CXL type 3 device");
+        return;
+    }
+
+    dcd = CXL_TYPE3(obj);
+    if (!dcd->dc.num_regions) {
+        error_setg(errp, "No dynamic capacity support from the device");
+        return;
+    }
+
+    if (rid >= dcd->dc.num_regions) {
+        error_setg(errp, "region id is too large");
+        return;
+    }
+
+    QemuUUID uuid_req;
+    qemu_uuid_parse(tag, &uuid_req);
+
+    list = &dcd->dc.extents;
+    size_t cap = 8, n = 0;
+    extents = g_new0(CXLDCExtentRaw, cap);
+    QTAILQ_FOREACH(ent, list, node) {
+        QemuUUID uuid_ext;
+        memcpy(&uuid_ext.data, ent->tag, sizeof(ent->tag));
+        if (!qemu_uuid_is_equal(&uuid_req, &uuid_ext)) {
+            continue;
+        }
+
+        if (n == cap) {
+            cap = cap < 8 ? 8 : cap * 2;
+            extents = g_renew(CXLDCExtentRaw, extents, cap);
+        }
+
+        extents[n++] = (CXLDCExtentRaw){ .start_dpa = ent->start_dpa,
+                                         .len = ent->len,
+                                         .shared_seq = 0 };
+    }
+
+    extents = g_renew(CXLDCExtentRaw, extents, n);
+    cxl_create_dc_event_records_for_extents(dcd, type, extents, n);
+    return;
+}
+
 void qmp_cxl_add_dynamic_capacity(const char *path, uint16_t host_id,
                                   CxlExtentSelectionPolicy sel_policy,
                                   uint8_t region, const char *tag,
@@ -2533,6 +2588,10 @@ void qmp_cxl_release_dynamic_capacity(const char *path, uint16_t host_id,
         qmp_cxl_process_dynamic_capacity_prescriptive(path, host_id, type,
                                                       region, tag, extents, errp);
         return;
+    case CXL_EXTENT_REMOVAL_POLICY_TAG_BASED:
+        qmp_cxl_process_dynamic_capacity_tag_based(path, host_id, type, region,
+                                                   tag, extents, errp);
+        return;
     default:
         error_setg(errp, "Removal policy not supported");
         return;
@@ -2558,6 +2617,66 @@ void cxl_remove_memory_alias(CXLType3Dev *dcd, struct CXLFixedWindow *fw,
 
     memory_region_del_subregion(&fw->mr, mr);
     return;
+}
+
+/*
+ * This function allows for a simple check to make sure that
+ * our extent is removed. It can be used by an orchestration layer.
+ */
+ExtentStatus *
+qmp_cxl_release_dynamic_capacity_status(const char *path,
+                                        uint16_t hid, uint8_t rid,
+                                        const char *tag,
+                                        Error **errp)
+{
+    Object *obj;
+    CXLType3Dev *dcd;
+    CXLDCExtentList *list = NULL;
+    CXLDCExtent *ent;
+    QemuUUID uuid_req;
+    ExtentStatus *res = g_new0(ExtentStatus, 1);
+
+    obj = object_resolve_path_type(path, TYPE_CXL_TYPE3, NULL);
+    if (!obj) {
+        error_setg(errp, "Unable to resolve CXL type 3 device");
+        return NULL;
+    }
+
+    dcd = CXL_TYPE3(obj);
+    if (!dcd->dc.num_regions) {
+        error_setg(errp, "No dynamic capacity support from the device");
+        return NULL;
+    }
+
+    if (rid >= dcd->dc.num_regions) {
+        error_setg(errp, "Region id is too large");
+        return NULL;
+    }
+
+    if (!tag) {
+        error_setg(errp, "Tag must be valid");
+        return NULL;
+    }
+
+    list = &dcd->dc.extents;
+    qemu_uuid_parse(tag, &uuid_req);
+
+    QTAILQ_FOREACH(ent, list, node) {
+        QemuUUID uuid_ext;
+        memcpy(&uuid_ext.data, ent->tag, sizeof(ent->tag));
+        if (qemu_uuid_is_equal(&uuid_req, &uuid_ext) == true) {
+            res->status = g_strdup("Not Released");
+            res->message =
+                g_strdup_printf("Found extent with tag %s dpa 0x%" PRIx64
+                                " len 0x%" PRIx64 "\n",
+                                ent->tag, ent->start_dpa, ent->len);
+            return res;
+        }
+    }
+
+    res->status = g_strdup("Released");
+    res->message = g_strdup_printf("Tag %s released or not found\n", tag);
+    return res;
 }
 
 static void ct3_class_init(ObjectClass *oc, const void *data)
