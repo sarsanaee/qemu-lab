@@ -30,6 +30,8 @@
 #include "system/numa.h"
 #include "hw/cxl/cxl.h"
 #include "hw/pci/msix.h"
+#include "hw/mem/tagged_mem.h"
+#include "qemu/uuid.h"
 
 /* type3 device private */
 enum CXL_T3_MSIX_VECTOR {
@@ -190,12 +192,15 @@ static int ct3_build_cdat_table(CDATSubHeader ***cdat_table, void *priv)
     }
 
     if (ct3d->dc.num_regions) {
-        if (!ct3d->dc.host_dc) {
-            return -EINVAL;
-        }
-        dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
-        if (!dc_mr) {
-            return -EINVAL;
+        /* Only check if DC is static (has a backing device) */
+        if (ct3d->dc.total_capacity_cmd == 0) {
+            if (!ct3d->dc.host_dc) {
+                return -EINVAL;
+            }
+            dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
+            if (!dc_mr) {
+                return -EINVAL;
+            }
         }
         len += CT3_CDAT_NUM_ENTRIES * ct3d->dc.num_regions;
     }
@@ -216,7 +221,7 @@ static int ct3_build_cdat_table(CDATSubHeader ***cdat_table, void *priv)
         cur_ent += CT3_CDAT_NUM_ENTRIES;
     }
 
-    if (dc_mr) {
+    if (dc_mr || ct3d->dc.total_capacity_cmd) {
         int i;
         uint64_t region_base = vmr_size + pmr_size;
 
@@ -651,8 +656,12 @@ static bool cxl_create_dc_regions(CXLType3Dev *ct3d, Error **errp)
     MemoryRegion *mr;
     uint64_t dc_size;
 
-    mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
-    dc_size = memory_region_size(mr);
+    if (ct3d->dc.total_capacity_cmd != 0) {
+        dc_size = ct3d->dc.total_capacity_cmd;
+    } else {
+        mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
+        dc_size = memory_region_size(mr);
+    }
     region_len = DIV_ROUND_UP(dc_size, ct3d->dc.num_regions);
 
     if (dc_size % (ct3d->dc.num_regions * CXL_CAPACITY_MULTIPLIER) != 0) {
@@ -818,36 +827,39 @@ static bool cxl_setup_memory(CXLType3Dev *ct3d, Error **errp)
         MemoryRegion *dc_mr;
         char *dc_name;
 
-        if (!ct3d->dc.host_dc) {
-            error_setg(errp, "dynamic capacity must have a backing device");
-            return false;
-        }
+        /* Only require backing device if total_capacity_cmd is zero */
+        if (ct3d->dc.total_capacity_cmd == 0) {
+            if (!ct3d->dc.host_dc) {
+                error_setg(errp, "dynamic capacity must have a backing device");
+                return false;
+            }
 
-        dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
-        if (!dc_mr) {
-            error_setg(errp, "dynamic capacity must have a backing device");
-            return false;
-        }
+            dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
+            if (!dc_mr) {
+                error_setg(errp, "dynamic capacity must have a backing device");
+                return false;
+            }
 
-        if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
-            error_setg(errp, "memory backend %s can't be used multiple times.",
-               object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
-            return false;
+            if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
+                error_setg(errp, "memory backend %s can't be used multiple times.",
+                   object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
+                return false;
+            }
+            /*
+             * Set DC regions as volatile for now, non-volatile support can
+             * be added in the future if needed.
+             */
+            memory_region_set_nonvolatile(dc_mr, false);
+            memory_region_set_enabled(dc_mr, true);
+            host_memory_backend_set_mapped(ct3d->dc.host_dc, true);
+            if (ds->id) {
+                dc_name = g_strdup_printf("cxl-dcd-dpa-dc-space:%s", ds->id);
+            } else {
+                dc_name = g_strdup("cxl-dcd-dpa-dc-space");
+            }
+            address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
+            g_free(dc_name);
         }
-        /*
-         * Set DC regions as volatile for now, non-volatile support can
-         * be added in the future if needed.
-         */
-        memory_region_set_nonvolatile(dc_mr, false);
-        memory_region_set_enabled(dc_mr, true);
-        host_memory_backend_set_mapped(ct3d->dc.host_dc, true);
-        if (ds->id) {
-            dc_name = g_strdup_printf("cxl-dcd-dpa-dc-space:%s", ds->id);
-        } else {
-            dc_name = g_strdup("cxl-dcd-dpa-dc-space");
-        }
-        address_space_init(&ct3d->dc.host_dc_as, dc_mr, dc_name);
-        g_free(dc_name);
 
         if (!cxl_create_dc_regions(ct3d, errp)) {
             error_append_hint(errp, "setup DC regions failed");
@@ -1361,6 +1373,8 @@ static const Property ct3_props[] = {
     DEFINE_PROP_UINT8("num-dc-regions", CXLType3Dev, dc.num_regions, 0),
     DEFINE_PROP_LINK("volatile-dc-memdev", CXLType3Dev, dc.host_dc,
                      TYPE_MEMORY_BACKEND, HostMemoryBackend *),
+    DEFINE_PROP_SIZE("dc-regions-total-size", CXLType3Dev,
+                     dc.total_capacity_cmd, 0),
     DEFINE_PROP_PCIE_LINK_SPEED("x-speed", CXLType3Dev,
                                 speed, PCIE_LINK_SPEED_32),
     DEFINE_PROP_PCIE_LINK_WIDTH("x-width", CXLType3Dev,
@@ -2275,13 +2289,40 @@ bool cxl_extent_groups_overlaps_dpa_range(CXLDCExtentGroupList *list,
     return false;
 }
 
+static bool cxl_device_lazy_dynamic_capacity_init(CXLType3Dev *ct3d,
+                                                  const char *tag,
+                                                  Error **errp)
+{
+    MemoryRegion *dc_mr;
+
+    ct3d->dc.host_dc = memory_backend_tagged_find_by_tag(tag, errp);
+    if (!ct3d->dc.host_dc) {
+        error_setg(errp, "dynamic capacity must have a backing device");
+        return false;
+    }
+
+    dc_mr = host_memory_backend_get_memory(ct3d->dc.host_dc);
+    if (!dc_mr) {
+        error_setg(errp, "test dynamic capacity must have a backing device");
+        return false;
+    }
+
+    if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
+        qemu_log("Warning: memory backend %s is already mapped. Reusing it.\n",
+                 object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
+        return true;
+    }
+
+    return true;
+}
+
 /*
  * The main function to process dynamic capacity event with extent list.
  * Currently DC extents add/release requests are processed.
  */
 static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
-        uint16_t hid, CXLDCEventType type, uint8_t rid,
-        CxlDynamicCapacityExtentList *records, Error **errp)
+    uint16_t hid, CXLDCEventType type, uint8_t rid,
+    const char *tag, CxlDynamicCapacityExtentList *records, Error **errp)
 {
     Object *obj;
     CXLType3Dev *dcd;
@@ -2289,7 +2330,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
     CxlDynamicCapacityExtentList *list;
     CXLDCExtentGroup *group = NULL;
     g_autofree CXLDCExtentRaw *extents = NULL;
-    uint64_t dpa, offset, len, block_size;
+    uint64_t dpa, offset, block_size;
+    uint64_t len = 0;
     g_autofree unsigned long *blk_bitmap = NULL;
     int i;
 
@@ -2314,11 +2356,13 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
     blk_bitmap = bitmap_new(dcd->dc.regions[rid].len / block_size);
 
     /* Sanity check and count the extents */
+    QemuUUID uuid;
     list = records;
     while (list) {
         offset = list->value->offset;
         len = list->value->len;
         dpa = offset + dcd->dc.regions[rid].base;
+        qemu_uuid_parse(tag, &uuid);
 
         if (len == 0) {
             error_setg(errp, "extent with 0 length is not allowed");
@@ -2383,7 +2427,7 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
 
         extents[i].start_dpa = dpa;
         extents[i].len = len;
-        memset(extents[i].tag, 0, 0x10);
+        memcpy(extents[i].tag, &uuid.data, 0x10);
         extents[i].shared_seq = 0;
         if (type == DC_EVENT_ADD_CAPACITY) {
             group = cxl_insert_extent_to_extent_group(group,
@@ -2396,6 +2440,31 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         list = list->next;
         i++;
     }
+    if (type == DC_EVENT_ADD_CAPACITY && dcd->dc.total_capacity_cmd) {
+        MemoryRegion *host_dc_mr;
+        uint64_t size;
+
+        if (num_extents > 1) {
+            error_setg(errp, "Only single extent add is supported currently");
+            return;
+        }
+
+        if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
+            return;
+        }
+
+        host_dc_mr = host_memory_backend_get_memory(dcd->dc.host_dc);
+        size = memory_region_size(host_dc_mr);
+
+        if (size != len) {
+            error_setg(errp,
+                       "Host memory backend size 0x%" PRIx64
+                       " does not match extent length 0x%" PRIx64,
+                       size, len);
+            return;
+        }
+    }
+
     if (group) {
         cxl_extent_group_list_insert_tail(&dcd->dc.extents_pending, group);
         dcd->dc.total_extent_count += num_extents;
@@ -2414,7 +2483,7 @@ void qmp_cxl_add_dynamic_capacity(const char *path, uint16_t host_id,
     case CXL_EXTENT_SELECTION_POLICY_PRESCRIPTIVE:
         qmp_cxl_process_dynamic_capacity_prescriptive(path, host_id,
                                                       DC_EVENT_ADD_CAPACITY,
-                                                      region, extents, errp);
+                                                      region, tag, extents, errp);
         return;
     default:
         error_setg(errp, "Selection policy not supported");
@@ -2445,7 +2514,7 @@ void qmp_cxl_release_dynamic_capacity(const char *path, uint16_t host_id,
     switch (removal_policy) {
     case CXL_EXTENT_REMOVAL_POLICY_PRESCRIPTIVE:
         qmp_cxl_process_dynamic_capacity_prescriptive(path, host_id, type,
-                                                      region, extents, errp);
+                                                      region, tag, extents, errp);
         return;
     default:
         error_setg(errp, "Removal policy not supported");
