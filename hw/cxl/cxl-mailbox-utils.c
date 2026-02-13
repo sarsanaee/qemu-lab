@@ -4270,6 +4270,10 @@ static CXLRetCode cmd_fm_initiate_dc_add(const struct cxl_cmd *cmd,
     CXLType3Dev *ct3d = CXL_TYPE3(cci->d);
     int i, rc;
 
+    if (ct3d->dc.total_capacity_cmd) {
+        return CXL_MBOX_UNSUPPORTED;
+    }
+
     switch (in->selection_policy) {
         case CXL_EXTENT_SELECTION_POLICY_PRESCRIPTIVE: {
             /* Adding extents exceeds device's extent tracking ability. */
@@ -4356,6 +4360,10 @@ static CXLRetCode cmd_fm_initiate_dc_release(const struct cxl_cmd *cmd,
     } QEMU_PACKED *in = (void *)payload_in;
     CXLType3Dev *ct3d = CXL_TYPE3(cci->d);
     int i, rc;
+
+    if (ct3d->dc.total_capacity_cmd) {
+        return CXL_MBOX_UNSUPPORTED;
+    }
 
     switch (in->flags & CXL_EXTENT_REMOVAL_POLICY_MASK) {
         case CXL_EXTENT_REMOVAL_POLICY_PRESCRIPTIVE: {
