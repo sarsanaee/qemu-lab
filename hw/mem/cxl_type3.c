@@ -2417,6 +2417,31 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         num_extents++;
     }
 
+    if (type == DC_EVENT_ADD_CAPACITY && dcd->dc.total_capacity_cmd) {
+        MemoryRegion *host_dc_mr;
+        uint64_t size;
+
+        if (num_extents > 1) {
+            error_setg(errp, "Only single extent add is supported currently");
+            return;
+        }
+
+        if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
+            return;
+        }
+
+        host_dc_mr = host_memory_backend_get_memory(dcd->dc.host_dc);
+        size = memory_region_size(host_dc_mr);
+
+        if (size != len) {
+            error_setg(errp,
+                       "Host memory backend size 0x%" PRIx64
+                       " does not match extent length 0x%" PRIx64,
+                       size, len);
+            return;
+        }
+    }
+
     /* Create extent list for event being passed to host */
     i = 0;
     list = records;
@@ -2457,30 +2482,6 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
 
         list = list->next;
         i++;
-    }
-    if (type == DC_EVENT_ADD_CAPACITY && dcd->dc.total_capacity_cmd) {
-        MemoryRegion *host_dc_mr;
-        uint64_t size;
-
-        if (num_extents > 1) {
-            error_setg(errp, "Only single extent add is supported currently");
-            return;
-        }
-
-        if (!cxl_device_lazy_dynamic_capacity_init(dcd, tag, errp)) {
-            return;
-        }
-
-        host_dc_mr = host_memory_backend_get_memory(dcd->dc.host_dc);
-        size = memory_region_size(host_dc_mr);
-
-        if (size != len) {
-            error_setg(errp,
-                       "Host memory backend size 0x%" PRIx64
-                       " does not match extent length 0x%" PRIx64,
-                       size, len);
-            return;
-        }
     }
 
     if (group) {
