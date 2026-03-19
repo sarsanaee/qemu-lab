@@ -1,0 +1,17 @@
+{
+    "files.associations": {
+        "cstdint": "c"
+    },
+    "files.watcherExclude": {
+        "**/build/remote-qemu/**": true,
+        "**/build/remote-kernel/**": true
+    },
+    "search.exclude": {
+        "**/build/remote-qemu/**": true,
+        "**/build/remote-kernel/**": true
+    },
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/remote-qemu/compile_commands.json",
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/build/remote-qemu"
+    ]
+}
